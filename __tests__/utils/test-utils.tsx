@@ -1,6 +1,6 @@
 import React, { ReactElement } from 'react'
 import { render, RenderOptions } from '@testing-library/react'
-import { ThemeProvider } from '@/components/theme-provider'
+import { ThemeProvider } from 'next-themes'
 
 interface AllTheProvidersProps {
     children: React.ReactNode

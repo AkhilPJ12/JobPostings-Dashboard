@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@/__tests__/utils/test-utils'
+import { render as rtlRender, screen } from '@testing-library/react'
 import { ThemeToggle } from '@/components/theme-toggle'
 
 // Mock next-themes
@@ -10,15 +10,10 @@ jest.mock('next-themes', () => ({
 }))
 
 describe('ThemeToggle', () => {
-    it('should render toggle button', () => {
-        render(<ThemeToggle />)
-        const button = screen.getByRole('button', { name: /toggle theme/i })
+    it('should render theme toggle button', () => {
+        rtlRender(<ThemeToggle />)
+        // Button has aria-label "Switch to dark mode"
+        const button = screen.getByRole('button', { name: /Switch to dark mode/i })
         expect(button).toBeInTheDocument()
-    })
-
-    it('should have correct aria-label', () => {
-        render(<ThemeToggle />)
-        const button = screen.getByRole('button', { name: /toggle theme/i })
-        expect(button).toHaveAttribute('aria-label', 'Toggle theme')
     })
 })
