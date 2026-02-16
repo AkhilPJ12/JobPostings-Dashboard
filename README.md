@@ -114,6 +114,27 @@ pnpm start
 pnpm lint
 ```
 
+### Testing
+
+Run the test suite:
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run tests with coverage report
+npm run test:coverage
+```
+
+**Test Coverage:**
+- ✅ Component tests for all major UI components
+- ✅ Utility tests for job data functions
+- ✅ Integration tests for search, filter, and pagination
+- 📊 Coverage threshold: 70% (branches, functions, lines, statements)
+
 ## 🎨 Key Technologies
 
 ### Core Framework

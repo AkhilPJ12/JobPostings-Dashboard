@@ -1,47 +1,44 @@
-# Dependencies
-node_modules/
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
 /.pnp
 .pnp.js
 .yarn/install-state.gz
 
-# Testing
-coverage/
-*.lcov
-.nyc_output
-__tests__/__snapshots__/
+# testing
+/coverage
+/__tests__/coverage
 
-# Next.js
+# next.js
 /.next/
 /out/
-next-env.d.ts
 
-# Production
+# production
 /build
-/dist
 
-# Misc
+# misc
 .DS_Store
 *.pem
 
-# Debug
+# debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
-lerna-debug.log*
 
-# Local env files
-.env
+# local env files
 .env*.local
+.env
 .env.development.local
 .env.test.local
 .env.production.local
 
-# Vercel
+# vercel
 .vercel
 
-# TypeScript
+# typescript
 *.tsbuildinfo
+next-env.d.ts
 
 # IDE
 .vscode/
@@ -49,30 +46,19 @@ lerna-debug.log*
 *.swp
 *.swo
 *~
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
 
 # OS
+.DS_Store
 Thumbs.db
 
-# Optional npm cache directory
-.npm
+# logs
+logs
+*.log
 
-# Optional eslint cache
-.eslintcache
+# package manager
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
 
-# Optional stylelint cache
-.stylelintcache
-
-# Turbopack
-.turbo
-
-# Lock files (keep only one)
-# Uncomment the lock file you want to keep
-# package-lock.json
-# pnpm-lock.yaml
-# yarn.lock
+# test
+.jest-cache

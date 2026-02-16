@@ -12,6 +12,10 @@ const customJestConfig = {
     moduleNameMapper: {
         '^@/(.*)$': '<rootDir>/$1',
     },
+    testMatch: [
+        '**/__tests__/**/*.test.[jt]s?(x)',
+        '**/?(*.)+(spec|test).[jt]s?(x)',
+    ],
     collectCoverageFrom: [
         'app/**/*.{js,jsx,ts,tsx}',
         'components/**/*.{js,jsx,ts,tsx}',
@@ -21,16 +25,6 @@ const customJestConfig = {
         '!**/.next/**',
         '!**/coverage/**',
         '!**/jest.config.js',
-    ],
-    testMatch: [
-        '**/__tests__/**/*.[jt]s?(x)',
-        '**/?(*.)+(spec|test).[jt]s?(x)',
-    ],
-    testPathIgnorePatterns: [
-        '/node_modules/',
-        '/.next/',
-        '/coverage/',
-        '/__tests__/utils/',
     ],
     coverageThreshold: {
         global: {
