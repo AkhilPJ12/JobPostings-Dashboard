@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation"
-import { jobs, getJobById } from "@/lib/job-data"
+import { getJobs, getJobById } from "@/lib/job-data"
 import { JobDetailContent } from "@/components/job-detail-content"
 
 export async function generateStaticParams() {
+  const jobs = await getJobs()
   return jobs.map((job) => ({ id: job.id }))
 }
 
@@ -12,7 +13,7 @@ export async function generateMetadata({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const job = getJobById(id)
+  const job = await getJobById(id)
 
   if (!job) {
     return { title: "Job Not Found" }
@@ -30,7 +31,7 @@ export default async function JobPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const job = getJobById(id)
+  const job = await getJobById(id)
 
   if (!job) {
     notFound()

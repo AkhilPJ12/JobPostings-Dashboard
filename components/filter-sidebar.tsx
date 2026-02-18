@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { Search, X } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -38,16 +38,40 @@ export function FilterSidebar({
 }: FilterSidebarProps) {
   const [companySearch, setCompanySearch] = useState("")
   const [showAllCompanies, setShowAllCompanies] = useState(false)
+  const [companies, setCompanies] = useState<string[]>([])
+  const [departments, setDepartments] = useState<string[]>([])
+  const [companyCounts, setCompanyCounts] = useState<Record<string, number>>({})
 
-  const companies = useMemo(() => getUniqueCompanies(), [])
-  const departments = useMemo(() => getUniqueDepartments(), [])
+  // Fetch companies and departments on mount
+  useEffect(() => {
+    async function fetchFilterData() {
+      try {
+        const [fetchedCompanies, fetchedDepartments] = await Promise.all([
+          getUniqueCompanies(),
+          getUniqueDepartments(),
+        ])
+        setCompanies(fetchedCompanies)
+        setDepartments(fetchedDepartments)
+
+        // Fetch job counts for each company
+        const counts: Record<string, number> = {}
+        for (const company of fetchedCompanies) {
+          counts[company] = await getJobCountByCompany(company)
+        }
+        setCompanyCounts(counts)
+      } catch (error) {
+        console.error('Error fetching filter data:', error)
+      }
+    }
+    fetchFilterData()
+  }, [])
 
   const filteredCompanies = useMemo(
     () =>
       companySearch
         ? companies.filter((c) =>
-            c.toLowerCase().includes(companySearch.toLowerCase())
-          )
+          c.toLowerCase().includes(companySearch.toLowerCase())
+        )
         : companies,
     [companies, companySearch]
   )
@@ -159,7 +183,7 @@ export function FilterSidebar({
                   />
                   <span className="flex-1 truncate text-foreground">{company}</span>
                   <span className="text-xs tabular-nums text-muted-foreground">
-                    {getJobCountByCompany(company)}
+                    {companyCounts[company] || 0}
                   </span>
                 </label>
               ))}

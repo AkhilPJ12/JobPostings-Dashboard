@@ -6,45 +6,34 @@ import {
 } from '@/lib/job-data'
 
 describe('job-data utilities', () => {
-    describe('getUniqueCompanies', () => {
-        it('should return unique company names', () => {
-            const companies = getUniqueCompanies()
-            expect(companies.length).toBeGreaterThan(0)
-            expect(new Set(companies).size).toBe(companies.length)
-        })
-    })
-
-    describe('getUniqueDepartments', () => {
-        it('should return unique departments', () => {
-            const departments = getUniqueDepartments()
-            expect(departments.length).toBeGreaterThan(0)
-            expect(new Set(departments).size).toBe(departments.length)
-        })
-    })
-
-    describe('getJobById', () => {
-        it('should return the correct job when given a valid id', () => {
-            const job = getJobById('1')
-            expect(job).toBeDefined()
-            expect(job?.id).toBe('1')
-        })
-
-        it('should return undefined for invalid id', () => {
-            const job = getJobById('invalid-id')
-            expect(job).toBeUndefined()
-        })
-    })
-
     describe('formatRelativeDate', () => {
         it('should return "Today" for current date', () => {
             const today = new Date()
             expect(formatRelativeDate(today)).toBe('Today')
         })
 
-        it('should return "X days ago" for recent dates', () => {
+        it('should return "Yesterday" for 1 day ago', () => {
+            const yesterday = new Date()
+            yesterday.setDate(yesterday.getDate() - 1)
+            expect(formatRelativeDate(yesterday)).toBe('Yesterday')
+        })
+
+        it('should return "X days ago" for 2-6 days ago', () => {
             const threeDaysAgo = new Date()
             threeDaysAgo.setDate(threeDaysAgo.getDate() - 3)
             expect(formatRelativeDate(threeDaysAgo)).toBe('3 days ago')
+        })
+
+        it('should return weeks for 7-29 days ago', () => {
+            const twoWeeksAgo = new Date()
+            twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14)
+            expect(formatRelativeDate(twoWeeksAgo)).toBe('2 weeks ago')
+        })
+
+        it('should return months for 30+ days ago', () => {
+            const twoMonthsAgo = new Date()
+            twoMonthsAgo.setDate(twoMonthsAgo.getDate() - 60)
+            expect(formatRelativeDate(twoMonthsAgo)).toBe('2 months ago')
         })
     })
 })

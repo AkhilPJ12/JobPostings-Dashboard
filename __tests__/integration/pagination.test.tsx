@@ -11,6 +11,36 @@ jest.mock('next/navigation', () => ({
     usePathname: () => '/',
 }))
 
+// Mock the job-data module so the component has data to paginate.
+// Note: jest.mock is hoisted, so mock data must be inlined in the factory.
+jest.mock('@/lib/job-data', () => {
+    const mockJobs = Array.from({ length: 15 }, (_, i) => ({
+        id: String(i + 1),
+        title: `Test Job ${i + 1}`,
+        company: `Company ${String.fromCharCode(65 + (i % 3))}`,
+        companyColor: 'hsl(0, 0%, 10%)',
+        location: 'Remote',
+        locationType: 'Remote',
+        department: 'Engineering',
+        type: 'Full-time',
+        postedDate: new Date(2026, 1, 18 - i),
+        description: `Description for job ${i + 1}`,
+        securityClearance: 'No',
+        h1bSponsorship: 'Yes',
+        summary: `Summary for job ${i + 1}`,
+        requiredQualifications: ['Req 1'],
+        preferredQualifications: ['Pref 1'],
+        payRange: '$100,000 - $150,000',
+    }))
+
+    const actual = jest.requireActual('@/lib/job-data')
+    return {
+        ...actual,
+        getJobs: jest.fn().mockResolvedValue(mockJobs),
+        getUniqueCompanyCount: jest.fn().mockResolvedValue(3),
+    }
+})
+
 describe('Pagination Integration', () => {
     it('should navigate between pages', async () => {
         render(<JobDashboard />)
@@ -26,7 +56,7 @@ describe('Pagination Integration', () => {
         fireEvent.click(nextButton)
 
         await waitFor(() => {
-            // Check that page 2 indicator exists (the number "2")
+            // Check that page 2 indicator exists
             const pageNumbers = screen.getAllByText('2')
             expect(pageNumbers.length).toBeGreaterThan(0)
         })
@@ -50,7 +80,7 @@ describe('Pagination Integration', () => {
 
         // Search should reset to page 1
         const searchInput = screen.getByPlaceholderText(/Search jobs/i)
-        fireEvent.change(searchInput, { target: { value: 'Engineer' } })
+        fireEvent.change(searchInput, { target: { value: 'Test' } })
 
         await waitFor(() => {
             // Should be back on page 1

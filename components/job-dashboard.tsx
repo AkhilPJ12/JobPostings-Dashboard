@@ -26,7 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { jobs, getUniqueCompanyCount, type Job } from "@/lib/job-data"
+import { getJobs, getUniqueCompanyCount, type Job } from "@/lib/job-data"
 import { FilterSidebar, type Filters } from "@/components/filter-sidebar"
 import { JobCard, JobCardSkeleton } from "@/components/job-card"
 import { JobPagination } from "@/components/job-pagination"
@@ -43,18 +43,37 @@ const defaultFilters: Filters = {
 }
 
 export function JobDashboard() {
+  const [jobs, setJobs] = useState<Job[]>([])
+  const [companyCount, setCompanyCount] = useState<number>(0)
   const [filters, setFilters] = useState<Filters>(defaultFilters)
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [sortBy, setSortBy] = useState("recent")
   const [currentPage, setCurrentPage] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
 
-  // Simulate initial load
+  // Fetch jobs from database on mount
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 600)
-    return () => clearTimeout(timer)
+    async function fetchJobs() {
+      try {
+        console.log('🔍 JobDashboard: Starting to fetch jobs...')
+        setIsLoading(true)
+        setError(null)
+        const fetchedJobs = await getJobs()
+        console.log('✅ JobDashboard: Fetched jobs:', fetchedJobs.length)
+        setJobs(fetchedJobs)
+        const count = await getUniqueCompanyCount()
+        setCompanyCount(count)
+      } catch (error) {
+        console.error('❌ JobDashboard: Error fetching jobs:', error)
+        setError(error instanceof Error ? error.message : 'Failed to load jobs')
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    fetchJobs()
   }, [])
 
   // Debounce search
@@ -147,7 +166,7 @@ export function JobDashboard() {
     }
 
     return result
-  }, [debouncedSearch, filters, sortBy])
+  }, [jobs, debouncedSearch, filters, sortBy])
 
   const totalPages = Math.ceil(filteredJobs.length / ITEMS_PER_PAGE)
   const paginatedJobs = filteredJobs.slice(
@@ -219,7 +238,7 @@ export function JobDashboard() {
             <Building2 className="h-4 w-4" />
             <span>
               <span className="font-semibold text-foreground">
-                {getUniqueCompanyCount()}
+                {companyCount}
               </span>{" "}
               companies
             </span>
