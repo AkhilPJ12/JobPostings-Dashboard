@@ -25,6 +25,7 @@ export type Database = {
                     logo_url: string | null
                     website_url: string | null
                     careers_url: string | null
+
                     color: string | null
                     is_active: boolean
                     created_at: string
@@ -57,6 +58,7 @@ export type Database = {
                 Row: {
                     id: number
                     company_id: number
+                    external_job_id: string | null
                     title: string
                     location: string | null
                     location_type: 'Remote' | 'Hybrid' | 'Onsite' | null
@@ -78,6 +80,7 @@ export type Database = {
                 Insert: {
                     id?: number
                     company_id: number
+                    external_job_id?: string | null
                     title: string
                     location?: string | null
                     location_type?: 'Remote' | 'Hybrid' | 'Onsite' | null
@@ -99,6 +102,7 @@ export type Database = {
                 Update: {
                     id?: number
                     company_id?: number
+                    external_job_id?: string | null
                     title?: string
                     location?: string | null
                     location_type?: 'Remote' | 'Hybrid' | 'Onsite' | null

@@ -26,24 +26,43 @@ export type Job = {
 export async function getJobs(): Promise<Job[]> {
     console.log('🔍 getJobs: Starting to fetch jobs from database...')
 
-    const { data, error } = await supabase
-        .from('jobs')
-        .select(`
-      *,
-      company:companies(*)
-    `)
-        .eq('is_active', true)
-        .order('posted_date', { ascending: false })
+    // Supabase enforces a server-side max of 1000 rows per request.
+    // Paginate to fetch all jobs.
+    const PAGE_SIZE = 1000
+    let allData: any[] = []
+    let from = 0
+    let hasMore = true
 
-    console.log('🔍 getJobs: Raw response:', { data, error, dataLength: data?.length })
+    while (hasMore) {
+        const { data, error } = await supabase
+            .from('jobs')
+            .select(`
+          *,
+          company:companies(*)
+        `)
+            .eq('is_active', true)
+            .order('posted_date', { ascending: false })
+            .range(from, from + PAGE_SIZE - 1)
 
-    if (error) {
-        console.error('❌ Error fetching jobs:', error)
-        throw error
+        if (error) {
+            console.error('❌ Error fetching jobs:', error)
+            throw error
+        }
+
+        if (data && data.length > 0) {
+            allData = allData.concat(data)
+            from += PAGE_SIZE
+            // If we got fewer than PAGE_SIZE, we've reached the end
+            hasMore = data.length === PAGE_SIZE
+        } else {
+            hasMore = false
+        }
     }
 
+    console.log('🔍 getJobs: Raw response total:', allData.length)
+
     // Transform database format to frontend format
-    const jobs = (data || []).map(job => ({
+    const jobs = allData.map(job => ({
         id: job.id.toString(),
         title: job.title,
         company: job.company.name,
