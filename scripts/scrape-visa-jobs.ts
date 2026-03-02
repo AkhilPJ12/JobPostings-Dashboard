@@ -1,16 +1,10 @@
 /**
- * Visa Jobs Scraper
+ * Visa Jobs Scraper (API-based)
  *
- * Scrapes job listings from Visa Corporate Careers.
- * API: search.visa.com/CAREERS/careers/jobs
- * Uses Playwright for browser context.
- *
- * NOTE: Visa only posts jobs in specific cities — keeping the original URL filters.
- *
- * Usage: npx tsx scripts/scrape-visa-jobs.ts
+ * Uses Visa search API directly and requires real posting dates (`createdOn`).
+ * Jobs without parsable dates are skipped per project rule.
  */
 
-import { chromium } from 'playwright'
 import {
     DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary,
     isWithinDaysOrFuture, parsePostedDate,
@@ -23,134 +17,190 @@ import {
 const CONFIG = {
     companyName: 'Visa',
     dateWindowDays: 14,
-    maxPages: 20,
+    pageSize: 100,
+    maxPages: 30,
+    defaultCities: [
+        'Ashburn', 'Atlanta', 'Austin', 'Bellevue', 'Foster', 'Foster City',
+        'Highlands Ranch', 'Lehi', 'Mentor', 'Miami', 'New York', 'Oakland',
+        'San Francisco', 'San Juan', 'Washington', 'Wilmington',
+    ],
+}
+
+type VisaApiJob = {
+    refNumber?: string
+    postingId?: string
+    jobTitle?: string
+    jobDescription?: string
+    qualifications?: string
+    additionalInformation?: string
+    city?: string
+    region?: string
+    country?: string
+    countryCode?: string
+    createdOn?: string
+    typeOfEmployment?: string
+    applyUrl?: string
+    department?: string
+    function?: string
+    superDepartment?: string
+}
+
+function extractCitiesFromCareerUrl(careerUrl: string): string[] {
+    try {
+        const url = new URL(careerUrl)
+        const cities = url.searchParams.getAll('cities').map(c => c.trim()).filter(Boolean)
+        return cities.length > 0 ? cities : CONFIG.defaultCities
+    } catch {
+        return CONFIG.defaultCities
+    }
 }
 
 async function scrapeVisaJobs() {
-    console.log(`🚀 Visa Jobs Scraper`)
+    console.log(`🚀 Visa Jobs Scraper (API)`)
     console.log(`📅 Fetching jobs posted in the last ${CONFIG.dateWindowDays} days`)
-    console.log(`🔍 Filters: Specific US cities, sorted by newest\n`)
+    console.log(`🔍 Filters: US cities, newest first\n`)
 
     const company = await getCompany(CONFIG.companyName)
     console.log(`✅ Company: ${company.name} (id: ${company.id})`)
 
-    const careerUrl = company.careers_url || 'https://corporate.visa.com/en/jobs/?cities=Ashburn&cities=Atlanta&cities=Austin&cities=Bellevue&cities=Foster&cities=Foster%20City&cities=Highlands%20Ranch&cities=Lehi&cities=Mentor&cities=Miami&cities=New%20York&cities=Oakland&cities=San%20Francisco&cities=San%20Juan&cities=Washington&cities=Wilmington&sortProperty=createdOn&sortOrder=DESC'
+    const careerUrl = company.careers_url || 'https://corporate.visa.com/en/jobs/'
     console.log(`🔗 Career URL: ${careerUrl}`)
+    const cities = extractCitiesFromCareerUrl(careerUrl)
+    console.log(`🏙️ Cities filter (${cities.length}): ${cities.join(', ')}`)
 
-    console.log(`\n🌐 Launching browser...`)
-    const browser = await chromium.launch({ headless: true })
-    const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    })
-    const page = await context.newPage()
+    const endpoint = 'https://search.visa.com/CAREERS/careers/jobs?q='
+    const collectedJobs: DbJob[] = []
+    const seenIds = new Set<string>()
+    let consecutiveNoNewPages = 0
 
-    try {
-        console.log(`📄 Loading Visa Careers page...`)
-        await page.goto(careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
-        await sleep(5000)
+    for (let page = 0; page < CONFIG.maxPages; page++) {
+        const from = page * CONFIG.pageSize
+        console.log(`📄 Page ${page + 1} (from=${from})...`)
 
-        // Accept cookies if needed
-        const cookieBtn = await page.$('button:has-text("Accept"), button:has-text("Accept All")')
-        if (cookieBtn) {
-            await cookieBtn.click()
-            await sleep(2000)
+        const resp = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json, text/plain, */*',
+                'Origin': 'https://corporate.visa.com',
+                'Referer': careerUrl,
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            },
+            body: JSON.stringify({
+                city: cities,
+                from,
+                size: CONFIG.pageSize,
+                sort: { createdOn: 'DESC' },
+            }),
+        })
+
+        if (!resp.ok) {
+            console.log(`   ⚠️ API error ${resp.status}. Stopping.`)
+            break
         }
 
-        console.log(`✅ Page loaded\n`)
+        const data = await resp.json() as { jobDetails?: VisaApiJob[] }
+        const rawJobs = data.jobDetails || []
 
-        const collectedJobs: DbJob[] = []
-        const seenIds = new Set<string>()
-        let scrollCount = 0
-        let previousCount = 0
+        if (rawJobs.length === 0) {
+            console.log('📭 No more jobs. Done.')
+            break
+        }
 
-        while (scrollCount < CONFIG.maxPages) {
-            // Extract jobs from DOM
-            const jobs = await page.evaluate(() => {
-                const cards = Array.from(document.querySelectorAll('a[href*="/en/jobs/"], [class*="job-card"], [class*="jobCard"]'))
-                return cards.map(card => {
-                    const link = card.closest('a') || card.querySelector('a')
-                    const href = (link as HTMLAnchorElement)?.href || ''
-                    const idMatch = href.match(/(REF\d+\w?)/) || href.match(/\/(\d+)(?:\?|$)/)
-                    const id = idMatch ? idMatch[1] : ''
-                    const title = card.querySelector('h2, h3, h4, [class*="title"]')?.textContent?.trim() ||
-                        (card as HTMLElement).querySelector('[class*="heading"]')?.textContent?.trim() || ''
-                    const location = card.querySelector('[class*="location"]')?.textContent?.trim() || ''
-                    const date = card.querySelector('[class*="date"]')?.textContent?.trim() || ''
-                    const text = card.textContent || ''
+        let newJobs = 0
+        let dateSkipped = 0
 
-                    return { id, title, location, date, url: href, text }
-                }).filter(j => j.title)
-            })
+        for (const j of rawJobs) {
+            const id = j.refNumber || j.postingId
+            if (!id || seenIds.has(id)) continue
+            seenIds.add(id)
 
-            console.log(`📄 Scroll ${scrollCount + 1}: Found ${jobs.length} job elements`)
-
-            let newJobs = 0
-            for (const j of jobs) {
-                if (!j.id || seenIds.has(j.id)) continue
-                seenIds.add(j.id)
-
-                const postedDate = parsePostedDate(j.date)
-
-                const job: DbJob = {
-                    company_id: company.id,
-                    external_job_id: `visa_${j.id}`,
-                    title: j.title,
-                    location: j.location || 'United States',
-                    location_type: determineLocationType(j.location, j.text),
-                    department: 'General',
-                    employment_type: determineEmploymentType(j.title),
-                    posted_date: postedDate || new Date().toISOString().split('T')[0],
-                    description: cleanHtml(j.text),
-                    summary: `${j.title} at Visa - ${j.location}`,
-                    required_qualifications: [],
-                    preferred_qualifications: [],
-                    pay_range: extractPayRange(j.text),
-                    security_clearance: detectSecurityClearance(j.text),
-                    h1b_sponsorship: detectH1BSponsorship(j.text),
-                    job_url: j.url || careerUrl,
-                    is_active: true,
-                }
-                collectedJobs.push(job)
-                newJobs++
+            const country = (j.countryCode || j.country || '').toLowerCase()
+            if (country && !['us', 'usa', 'united states', 'united states of america'].includes(country)) {
+                continue
             }
 
-            console.log(`   ✅ ${newJobs} new jobs (${collectedJobs.length} total)`)
+            const postedDate = parsePostedDate(j.createdOn || null)
+            if (!postedDate) {
+                dateSkipped++
+                continue
+            }
+            if (!isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
+                dateSkipped++
+                continue
+            }
 
-            if (collectedJobs.length === previousCount && scrollCount > 1) {
-                console.log('📭 No new jobs found. Done.')
+            const title = (j.jobTitle || '').trim()
+            if (!title) continue
+
+            const locationParts = [j.city, j.region, j.countryCode?.toUpperCase()].filter(Boolean)
+            const location = locationParts.join(', ') || 'United States'
+
+            const description = cleanHtml([
+                j.jobDescription || '',
+                j.qualifications || '',
+                j.additionalInformation || '',
+            ].join('\n\n'))
+
+            const dept = j.superDepartment || j.department || j.function || 'General'
+            const textForSignals = `${title}\n${description}`
+
+            const job: DbJob = {
+                company_id: company.id,
+                external_job_id: `visa_${id}`,
+                title,
+                location,
+                location_type: determineLocationType(location, description),
+                department: dept,
+                employment_type: determineEmploymentType(j.typeOfEmployment || title),
+                posted_date: postedDate,
+                description,
+                summary: createSummary(description),
+                required_qualifications: [],
+                preferred_qualifications: [],
+                pay_range: extractPayRange(description),
+                security_clearance: detectSecurityClearance(textForSignals),
+                h1b_sponsorship: detectH1BSponsorship(textForSignals),
+                job_url: j.applyUrl || careerUrl,
+                is_active: true,
+            }
+
+            collectedJobs.push(job)
+            newJobs++
+        }
+
+        console.log(`   ✅ ${newJobs} new jobs (${collectedJobs.length} total), ${dateSkipped} date-skipped`)
+
+        if (newJobs === 0) {
+            consecutiveNoNewPages++
+            if (consecutiveNoNewPages >= 3) {
+                console.log('📭 No new jobs for multiple pages. Done.')
                 break
             }
-            previousCount = collectedJobs.length
-
-            // Load more
-            const showMore = await page.$('button:has-text("Show more"), button:has-text("Load more"), [class*="load-more"]')
-            if (showMore) {
-                await showMore.click()
-                await sleep(3000)
-            } else {
-                await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-                await sleep(2000)
-            }
-
-            scrollCount++
-            await sleep(randomDelay(2000, 4000))
+        } else {
+            consecutiveNoNewPages = 0
         }
 
-        console.log(`\n📊 Total jobs collected: ${collectedJobs.length}`)
-
-        if (collectedJobs.length === 0) {
-            console.log('⚠️  No jobs found.')
-            return
+        if (rawJobs.length < CONFIG.pageSize) {
+            console.log('📭 Last page reached. Done.')
+            break
         }
 
-        console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs into Supabase...`)
-        const upsertedCount = await upsertJobsBatch(collectedJobs)
-        const dbCount = await getCompanyJobCount(company.id)
-        logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
-
-    } finally {
-        await browser.close()
+        const delay = randomDelay(1200, 2500)
+        await sleep(delay)
     }
+
+    console.log(`\n📊 Total jobs collected: ${collectedJobs.length}`)
+
+    if (collectedJobs.length === 0) {
+        console.log('⚠️  No jobs found with valid posting dates.')
+        return
+    }
+
+    console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs into Supabase...`)
+    const upsertedCount = await upsertJobsBatch(collectedJobs)
+    const dbCount = await getCompanyJobCount(company.id)
+    logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
 }
 
 scrapeVisaJobs().catch(err => {

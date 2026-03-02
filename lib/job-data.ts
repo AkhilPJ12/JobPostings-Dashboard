@@ -20,6 +20,16 @@ export type Job = {
     payRange: string
 }
 
+export type ScraperRunStatus = "Successful" | "Error" | "Partial"
+
+export type ScraperStatus = {
+    companyName: string
+    status: ScraperRunStatus | "Not Run"
+    lastScrapedAt: Date | null
+    durationSeconds: number | null
+    errorMessage: string | null
+}
+
 /**
  * Fetch all active jobs from the database with company information
  */
@@ -220,4 +230,65 @@ export function formatRelativeDate(date: Date): string {
     if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
     if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`
     return `${Math.floor(diffDays / 365)} years ago`
+}
+
+/**
+ * Get latest scraper status for each active company.
+ */
+export async function getScraperStatuses(): Promise<ScraperStatus[]> {
+    const { data: companies, error: companyError } = await supabase
+        .from('companies')
+        .select('name')
+        .eq('is_active', true)
+        .order('name')
+
+    if (companyError) {
+        console.error('Error fetching companies for scraper status:', companyError)
+        return []
+    }
+
+    const companyNames = (companies || []).map(c => c.name)
+    if (companyNames.length === 0) return []
+
+    const { data: runs, error: runsError } = await supabase
+        .from('scraper_runs')
+        .select('company_name, status, completed_at, duration_seconds, error_message')
+        .in('company_name', companyNames)
+        .order('completed_at', { ascending: false })
+
+    if (runsError) {
+        // Gracefully handle missing table / permission while UI is already deployed.
+        console.error('Error fetching scraper runs:', runsError)
+        return companyNames.map((name) => ({
+            companyName: name,
+            status: "Not Run",
+            lastScrapedAt: null,
+            durationSeconds: null,
+            errorMessage: null,
+        }))
+    }
+
+    const latestByCompany = new Map<string, {
+        status: ScraperRunStatus
+        completed_at: string | null
+        duration_seconds: number | null
+        error_message: string | null
+    }>()
+
+    for (const run of runs || []) {
+        if (!latestByCompany.has(run.company_name)) {
+            latestByCompany.set(run.company_name, run)
+        }
+    }
+
+    return companyNames.map((name) => {
+        const latest = latestByCompany.get(name)
+        return {
+            companyName: name,
+            status: latest?.status || "Not Run",
+            lastScrapedAt: latest?.completed_at ? new Date(latest.completed_at) : null,
+            durationSeconds: latest?.duration_seconds ?? null,
+            errorMessage: latest?.error_message ?? null,
+        }
+    })
 }

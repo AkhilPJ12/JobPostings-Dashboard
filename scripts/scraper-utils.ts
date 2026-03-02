@@ -55,6 +55,7 @@ export interface CompanyRecord {
     id: number
     name: string
     careers_url: string | null
+    careers_url_1: string | null
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -381,7 +382,7 @@ export function randomDelay(min = 2000, max = 5000): number {
 export async function getCompany(companyName: string): Promise<CompanyRecord> {
     const { data, error } = await supabase
         .from('companies')
-        .select('id, name, careers_url')
+        .select('id, name, careers_url, careers_url_1')
         .eq('name', companyName)
         .maybeSingle()
 

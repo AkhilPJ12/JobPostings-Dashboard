@@ -1,13 +1,10 @@
 /**
- * JPMorgan Chase Jobs Scraper
+ * JPMorgan Chase Jobs Scraper (Oracle HCM API)
  *
- * Scrapes job listings from JPMorgan Chase Careers (Oracle HCM Cloud).
- * Uses Playwright to access the Oracle HCM candidate experience portal.
- *
- * Usage: npx tsx scripts/scrape-jpmorgan-jobs.ts
+ * Uses Oracle Candidate Experience API and requires real `PostedDate`.
+ * Jobs without parsable posting dates are skipped.
  */
 
-import { chromium } from 'playwright'
 import {
     DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary,
     isWithinDaysOrFuture, parsePostedDate,
@@ -20,184 +17,185 @@ import {
 const CONFIG = {
     companyName: 'JPMorgan Chase',
     dateWindowDays: 14,
-    maxPages: 100,
+    pageSize: 25,
+    maxPages: 120,
+}
+
+type WorkLocation = {
+    TownOrCity?: string
+    Region2?: string
+    Country?: string
+}
+
+type Requisition = {
+    Id?: string
+    Title?: string
+    PostedDate?: string
+    PrimaryLocation?: string
+    PrimaryLocationCountry?: string
+    Department?: string
+    JobFamily?: string
+    JobType?: string
+    WorkerType?: string
+    ContractType?: string
+    ShortDescriptionStr?: string
+    ExternalResponsibilitiesStr?: string
+    ExternalQualificationsStr?: string
+    workLocation?: WorkLocation[]
+}
+
+function buildEndpoint(limit: number, offset: number): string {
+    const finder = [
+        'findReqs;siteNumber=CX_1001',
+        'facetsList=LOCATIONS%3BWORK_LOCATIONS%3BWORKPLACE_TYPES%3BTITLES%3BCATEGORIES%3BORGANIZATIONS%3BPOSTING_DATES%3BFLEX_FIELDS',
+        `limit=${limit}`,
+        `offset=${offset}`,
+        'lastSelectedFacet=POSTING_DATES',
+        'locationId=300000000289738',
+        'selectedPostingDatesFacet=14',
+        'sortBy=POSTING_DATES_DESC',
+    ].join(',')
+
+    return `https://jpmc.fa.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions?onlyData=true&expand=requisitionList.workLocation,requisitionList.otherWorkLocations,requisitionList.secondaryLocations,flexFieldsFacet.values,requisitionList.requisitionFlexFields&finder=${finder}`
+}
+
+function buildLocation(job: Requisition): string {
+    if (job.PrimaryLocation) return job.PrimaryLocation
+    const wl = job.workLocation?.[0]
+    if (!wl) return 'United States'
+    return [wl.TownOrCity, wl.Region2, wl.Country].filter(Boolean).join(', ') || 'United States'
 }
 
 async function scrapeJPMorganJobs() {
-    console.log(`🚀 JPMorgan Chase Jobs Scraper`)
+    console.log(`🚀 JPMorgan Chase Jobs Scraper (API)`)
     console.log(`📅 Fetching jobs posted in the last ${CONFIG.dateWindowDays} days`)
-    console.log(`🔍 Filters: United States, posted in last 30 days\n`)
+    console.log(`🔍 Filters: United States, newest first\n`)
 
     const company = await getCompany(CONFIG.companyName)
     console.log(`✅ Company: ${company.name} (id: ${company.id})`)
 
-    const careerUrl = company.careers_url || 'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs?lastSelectedFacet=POSTING_DATES&location=United+States&locationId=300000000289738&locationLevel=country&mode=location&selectedPostingDatesFacet=30'
+    const careerUrl = company.careers_url || 'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs'
     console.log(`🔗 Career URL: ${careerUrl}`)
 
-    console.log(`\n🌐 Launching browser...`)
-    const browser = await chromium.launch({ headless: true })
-    const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    })
-    const page = await context.newPage()
+    const seenIds = new Set<string>()
+    let totalCollected = 0
+    let totalUpserted = 0
 
-    try {
-        console.log(`📄 Loading JPMorgan Careers page...`)
-        await page.goto(careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
-        await sleep(8000) // Oracle HCM takes long to render
+    for (let page = 0; page < CONFIG.maxPages; page++) {
+        const offset = page * CONFIG.pageSize
+        console.log(`📄 Page ${page + 1} (offset=${offset})...`)
 
-        // Accept privacy notice if present
-        const privacyBtn = await page.$('button:has-text("Confirm"), button:has-text("Accept"), button:has-text("OK")')
-        if (privacyBtn) {
-            await privacyBtn.click()
-            await sleep(3000)
+        const endpoint = buildEndpoint(CONFIG.pageSize, offset)
+        const resp = await fetch(endpoint, {
+            headers: {
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            },
+        })
+
+        if (!resp.ok) {
+            console.log(`   ⚠️ API error ${resp.status}. Stopping.`)
+            break
         }
 
-        console.log(`✅ Page loaded\n`)
+        const data = await resp.json() as { items?: { requisitionList?: Requisition[] }[] }
+        const reqs = data.items?.[0]?.requisitionList || []
 
-        const collectedJobs: DbJob[] = []
-        const seenIds = new Set<string>()
-        let pageNum = 1
-        let consecutiveEmpty = 0
+        if (reqs.length === 0) {
+            console.log('📭 No more requisitions. Done.')
+            break
+        }
 
-        while (pageNum <= CONFIG.maxPages) {
-            console.log(`📄 Page ${pageNum}...`)
+        let newJobs = 0
+        let dateSkipped = 0
+        const pageJobs: DbJob[] = []
 
-            // Extract jobs from Oracle HCM DOM
-            const jobs = await page.evaluate(() => {
-                const cards = Array.from(document.querySelectorAll('[class*="job-card"], [class*="requisition"], a[href*="/requisition/"]'))
-                return cards.map(card => {
-                    const link = card.querySelector('a') || card.closest('a')
-                    const href = (link as HTMLAnchorElement)?.href || ''
-                    const idMatch = href.match(/\/(\d{9,})/)
-                    const id = idMatch ? idMatch[1] : ''
-                    const title = card.querySelector('h2, h3, [class*="title"], [class*="Title"]')?.textContent?.trim() || ''
-                    const location = card.querySelector('[class*="location"], [class*="Location"]')?.textContent?.trim() || ''
-                    const date = card.querySelector('[class*="date"], [class*="Date"]')?.textContent?.trim() || ''
-                    const text = card.textContent || ''
+        for (const j of reqs) {
+            const id = j.Id
+            const title = (j.Title || '').trim()
+            if (!id || !title || seenIds.has(id)) continue
+            seenIds.add(id)
 
-                    return { id, title, location, date, url: href, text }
-                }).filter(j => j.title)
-            })
-
-            if (jobs.length === 0) {
-                // Try alternate Oracle HCM selector
-                const altJobs = await page.evaluate(() => {
-                    const items = Array.from(document.querySelectorAll('li[class*="job"], div[class*="job"]'))
-                    return items.map(item => {
-                        const titleEl = item.querySelector('h1, h2, h3, a')
-                        const title = titleEl?.textContent?.trim() || ''
-                        const link = item.querySelector('a')
-                        const href = (link as HTMLAnchorElement)?.href || ''
-                        const idMatch = href.match(/\/(\d+)/)
-                        const loc = item.querySelector('[class*="loc"]')?.textContent?.trim() || ''
-                        return { id: idMatch?.[1] || '', title, location: loc, date: '', url: href, text: item.textContent || '' }
-                    }).filter(j => j.title)
-                })
-
-                if (altJobs.length === 0) {
-                    consecutiveEmpty++
-                    if (consecutiveEmpty >= 2) {
-                        console.log('📭 No more jobs found. Done.')
-                        break
-                    }
-                }
-
-                for (const j of altJobs) {
-                    if (!j.id || seenIds.has(j.id)) continue
-                    seenIds.add(j.id)
-
-                    const job: DbJob = {
-                        company_id: company.id,
-                        external_job_id: `jpmorgan_${j.id}`,
-                        title: j.title,
-                        location: j.location || 'United States',
-                        location_type: determineLocationType(j.location, j.text),
-                        department: 'General',
-                        employment_type: determineEmploymentType(j.title),
-                        posted_date: new Date().toISOString().split('T')[0],
-                        description: cleanHtml(j.text),
-                        summary: `${j.title} at JPMorgan Chase`,
-                        required_qualifications: [],
-                        preferred_qualifications: [],
-                        pay_range: extractPayRange(j.text),
-                        security_clearance: detectSecurityClearance(j.text),
-                        h1b_sponsorship: detectH1BSponsorship(j.text),
-                        job_url: j.url || careerUrl,
-                        is_active: true,
-                    }
-                    collectedJobs.push(job)
-                }
-            } else {
-                consecutiveEmpty = 0
-                let newJobs = 0
-                for (const j of jobs) {
-                    if (!j.id || seenIds.has(j.id)) continue
-                    seenIds.add(j.id)
-
-                    const postedDate = parsePostedDate(j.date)
-                    if (postedDate && !isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) continue
-
-                    const job: DbJob = {
-                        company_id: company.id,
-                        external_job_id: `jpmorgan_${j.id}`,
-                        title: j.title,
-                        location: j.location || 'United States',
-                        location_type: determineLocationType(j.location, j.text),
-                        department: 'General',
-                        employment_type: determineEmploymentType(j.title),
-                        posted_date: postedDate || new Date().toISOString().split('T')[0],
-                        description: cleanHtml(j.text),
-                        summary: `${j.title} at JPMorgan Chase - ${j.location}`,
-                        required_qualifications: [],
-                        preferred_qualifications: [],
-                        pay_range: extractPayRange(j.text),
-                        security_clearance: detectSecurityClearance(j.text),
-                        h1b_sponsorship: detectH1BSponsorship(j.text),
-                        job_url: j.url || careerUrl,
-                        is_active: true,
-                    }
-                    collectedJobs.push(job)
-                    newJobs++
-                }
-
-                console.log(`   ✅ ${newJobs} new jobs (${collectedJobs.length} total)`)
+            const postedDate = parsePostedDate(j.PostedDate || null)
+            if (!postedDate) {
+                dateSkipped++
+                continue
+            }
+            if (!isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
+                dateSkipped++
+                continue
             }
 
-            // Navigate to next page
-            const nextBtn = await page.$('[aria-label="Next"], button:has-text("Next"), [class*="next-page"]')
-            if (nextBtn) {
-                await nextBtn.click()
-                await sleep(randomDelay(3000, 6000))
-                pageNum++
-            } else {
-                // Try scrolling to load more
-                await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-                await sleep(3000)
-                pageNum++
+            const location = buildLocation(j)
+            const country = (j.PrimaryLocationCountry || '').toUpperCase()
+            if (country && country !== 'US') continue
 
-                if (pageNum > 3 && collectedJobs.length === 0) {
-                    console.log('📭 Could not find job elements. Done.')
-                    break
-                }
+            const description = cleanHtml([
+                j.ShortDescriptionStr || '',
+                j.ExternalResponsibilitiesStr || '',
+                j.ExternalQualificationsStr || '',
+            ].join('\n\n'))
+
+            const dept = j.Department || j.JobFamily || 'General'
+            const fullText = `${title}\n${description}`
+
+            const job: DbJob = {
+                company_id: company.id,
+                external_job_id: `jpmorgan_${id}`,
+                title,
+                location,
+                location_type: determineLocationType(location, description),
+                department: dept,
+                employment_type: determineEmploymentType(j.WorkerType || j.JobType || j.ContractType || title),
+                posted_date: postedDate,
+                description,
+                summary: createSummary(description),
+                required_qualifications: [],
+                preferred_qualifications: [],
+                pay_range: extractPayRange(description),
+                security_clearance: detectSecurityClearance(fullText),
+                h1b_sponsorship: detectH1BSponsorship(fullText),
+                job_url: `https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job/${id}`,
+                is_active: true,
             }
+
+            pageJobs.push(job)
+            newJobs++
         }
 
-        console.log(`\n📊 Total jobs collected: ${collectedJobs.length}`)
+        totalCollected += pageJobs.length
 
-        if (collectedJobs.length === 0) {
-            console.log('⚠️  No jobs found.')
-            return
+        if (pageJobs.length > 0) {
+            const upserted = await upsertJobsBatch(pageJobs)
+            totalUpserted += upserted
         }
 
-        console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs into Supabase...`)
-        const upsertedCount = await upsertJobsBatch(collectedJobs)
-        const dbCount = await getCompanyJobCount(company.id)
-        logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
+        console.log(`   ✅ ${newJobs} new jobs (${totalCollected} total), ${dateSkipped} date-skipped`)
 
-    } finally {
-        await browser.close()
+        if (newJobs === 0 && dateSkipped > 0) {
+            console.log('📭 Reached jobs older than date window. Done.')
+            break
+        }
+
+        if (reqs.length < CONFIG.pageSize) {
+            console.log('📭 Last page reached. Done.')
+            break
+        }
+
+        const delay = randomDelay(1200, 2500)
+        await sleep(delay)
     }
+
+    console.log(`\n📊 Total jobs collected: ${totalCollected}`)
+
+    if (totalCollected === 0) {
+        console.log('⚠️  No jobs found with valid posting dates.')
+        return
+    }
+
+    console.log(`\n🗄️  Upsert complete during pagination.`)
+    const dbCount = await getCompanyJobCount(company.id)
+    logSummary(CONFIG.companyName, totalCollected, totalUpserted, dbCount, careerUrl)
 }
 
 scrapeJPMorganJobs().catch(err => {

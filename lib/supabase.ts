@@ -25,6 +25,7 @@ export type Database = {
                     logo_url: string | null
                     website_url: string | null
                     careers_url: string | null
+                    careers_url_1: string | null
 
                     color: string | null
                     is_active: boolean
@@ -37,6 +38,7 @@ export type Database = {
                     logo_url?: string | null
                     website_url?: string | null
                     careers_url?: string | null
+                    careers_url_1?: string | null
                     color?: string | null
                     is_active?: boolean
                     created_at?: string
@@ -48,6 +50,7 @@ export type Database = {
                     logo_url?: string | null
                     website_url?: string | null
                     careers_url?: string | null
+                    careers_url_1?: string | null
                     color?: string | null
                     is_active?: boolean
                     created_at?: string
@@ -120,6 +123,41 @@ export type Database = {
                     is_active?: boolean
                     created_at?: string
                     updated_at?: string
+                }
+            }
+            scraper_runs: {
+                Row: {
+                    id: number
+                    company_name: string
+                    run_group_id: string | null
+                    status: 'Successful' | 'Error' | 'Partial'
+                    started_at: string
+                    completed_at: string | null
+                    duration_seconds: number | null
+                    error_message: string | null
+                    created_at: string
+                }
+                Insert: {
+                    id?: number
+                    company_name: string
+                    run_group_id?: string | null
+                    status: 'Successful' | 'Error' | 'Partial'
+                    started_at: string
+                    completed_at?: string | null
+                    duration_seconds?: number | null
+                    error_message?: string | null
+                    created_at?: string
+                }
+                Update: {
+                    id?: number
+                    company_name?: string
+                    run_group_id?: string | null
+                    status?: 'Successful' | 'Error' | 'Partial'
+                    started_at?: string
+                    completed_at?: string | null
+                    duration_seconds?: number | null
+                    error_message?: string | null
+                    created_at?: string
                 }
             }
         }

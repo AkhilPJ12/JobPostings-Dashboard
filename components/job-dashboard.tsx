@@ -7,7 +7,7 @@ import {
   SlidersHorizontal,
   Briefcase,
   Building2,
-  ChevronDown,
+  Activity,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -26,11 +26,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { getJobs, getUniqueCompanyCount, type Job } from "@/lib/job-data"
+import {
+  getJobs,
+  getUniqueCompanyCount,
+  getScraperStatuses,
+  type Job,
+  type ScraperStatus,
+} from "@/lib/job-data"
 import { FilterSidebar, type Filters } from "@/components/filter-sidebar"
 import { JobCard, JobCardSkeleton } from "@/components/job-card"
 import { JobPagination } from "@/components/job-pagination"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { ScraperStatusTable } from "@/components/scraper-status-table"
 
 const ITEMS_PER_PAGE = 12
 
@@ -43,7 +50,9 @@ const defaultFilters: Filters = {
 }
 
 export function JobDashboard() {
+  const [activeView, setActiveView] = useState<"jobs" | "status">("jobs")
   const [jobs, setJobs] = useState<Job[]>([])
+  const [scraperStatuses, setScraperStatuses] = useState<ScraperStatus[]>([])
   const [companyCount, setCompanyCount] = useState<number>(0)
   const [filters, setFilters] = useState<Filters>(defaultFilters)
   const [searchQuery, setSearchQuery] = useState("")
@@ -51,7 +60,9 @@ export function JobDashboard() {
   const [sortBy, setSortBy] = useState("recent")
   const [currentPage, setCurrentPage] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
+  const [isStatusLoading, setIsStatusLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
 
   // Fetch jobs from database on mount
@@ -60,17 +71,27 @@ export function JobDashboard() {
       try {
         console.log('🔍 JobDashboard: Starting to fetch jobs...')
         setIsLoading(true)
+        setIsStatusLoading(true)
         setError(null)
-        const fetchedJobs = await getJobs()
+        setStatusError(null)
+
+        const [fetchedJobs, count, statuses] = await Promise.all([
+          getJobs(),
+          getUniqueCompanyCount(),
+          getScraperStatuses(),
+        ])
+
         console.log('✅ JobDashboard: Fetched jobs:', fetchedJobs.length)
         setJobs(fetchedJobs)
-        const count = await getUniqueCompanyCount()
         setCompanyCount(count)
+        setScraperStatuses(statuses)
       } catch (error) {
         console.error('❌ JobDashboard: Error fetching jobs:', error)
         setError(error instanceof Error ? error.message : 'Failed to load jobs')
+        setStatusError(error instanceof Error ? error.message : 'Failed to load scraper status')
       } finally {
         setIsLoading(false)
+        setIsStatusLoading(false)
       }
     }
     fetchJobs()
@@ -206,8 +227,29 @@ export function JobDashboard() {
             </h1>
           </div>
 
+          <div className="hidden items-center gap-1 rounded-lg border border-border bg-muted/40 p-1 md:flex">
+            <Button
+              variant={activeView === "jobs" ? "default" : "ghost"}
+              size="sm"
+              className="h-8"
+              onClick={() => setActiveView("jobs")}
+            >
+              Jobs
+            </Button>
+            <Button
+              variant={activeView === "status" ? "default" : "ghost"}
+              size="sm"
+              className="h-8"
+              onClick={() => setActiveView("status")}
+            >
+              Status
+            </Button>
+          </div>
+
           {/* Search bar */}
           <div className="relative mx-auto w-full max-w-xl">
+            {activeView === "jobs" ? (
+              <>
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search"
@@ -226,22 +268,39 @@ export function JobDashboard() {
                 <X className="h-4 w-4" />
               </button>
             )}
+              </>
+            ) : (
+              <div className="hidden h-10 items-center rounded-md bg-muted/50 px-3 text-sm text-muted-foreground sm:flex">
+                Scraper run status by company
+              </div>
+            )}
           </div>
 
           {/* Stats */}
           <div className="hidden shrink-0 items-center gap-1.5 text-sm text-muted-foreground lg:flex">
-            <Briefcase className="h-4 w-4" />
-            <span>
-              <span className="font-semibold text-foreground">{jobs.length}</span> jobs
-            </span>
-            <span className="text-border">{"/"}</span>
-            <Building2 className="h-4 w-4" />
-            <span>
-              <span className="font-semibold text-foreground">
-                {companyCount}
-              </span>{" "}
-              companies
-            </span>
+            {activeView === "jobs" ? (
+              <>
+                <Briefcase className="h-4 w-4" />
+                <span>
+                  <span className="font-semibold text-foreground">{jobs.length}</span> jobs
+                </span>
+                <span className="text-border">{"/"}</span>
+                <Building2 className="h-4 w-4" />
+                <span>
+                  <span className="font-semibold text-foreground">
+                    {companyCount}
+                  </span>{" "}
+                  companies
+                </span>
+              </>
+            ) : (
+              <>
+                <Activity className="h-4 w-4" />
+                <span>
+                  <span className="font-semibold text-foreground">{scraperStatuses.length}</span> scrapers
+                </span>
+              </>
+            )}
           </div>
 
           {/* Theme toggle */}
@@ -254,10 +313,10 @@ export function JobDashboard() {
                 variant="outline"
                 size="icon"
                 className="relative shrink-0 lg:hidden"
-                aria-label="Open filters"
+                aria-label={activeView === "jobs" ? "Open filters" : "Open view options"}
               >
-                <SlidersHorizontal className="h-4 w-4" />
-                {activeFilterCount > 0 && (
+                {activeView === "jobs" ? <SlidersHorizontal className="h-4 w-4" /> : <Activity className="h-4 w-4" />}
+                {activeView === "jobs" && activeFilterCount > 0 && (
                   <span className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
                     {activeFilterCount}
                   </span>
@@ -268,13 +327,39 @@ export function JobDashboard() {
               <SheetHeader className="sr-only">
                 <SheetTitle>Filters</SheetTitle>
               </SheetHeader>
-              <FilterSidebar
-                filters={filters}
-                onFiltersChange={(f) => {
-                  handleFiltersChange(f)
-                }}
-                activeFilterCount={activeFilterCount}
-              />
+              {activeView === "jobs" ? (
+                <FilterSidebar
+                  filters={filters}
+                  onFiltersChange={(f) => {
+                    handleFiltersChange(f)
+                  }}
+                  activeFilterCount={activeFilterCount}
+                />
+              ) : (
+                <div className="p-4">
+                  <div className="mb-2 text-sm font-medium">View</div>
+                  <div className="grid gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setActiveView("jobs")
+                        setMobileFiltersOpen(false)
+                      }}
+                    >
+                      Jobs
+                    </Button>
+                    <Button
+                      variant="default"
+                      onClick={() => {
+                        setActiveView("status")
+                        setMobileFiltersOpen(false)
+                      }}
+                    >
+                      Status
+                    </Button>
+                  </div>
+                </div>
+              )}
             </SheetContent>
           </Sheet>
         </div>
@@ -283,6 +368,7 @@ export function JobDashboard() {
       {/* Main content */}
       <div className="mx-auto flex w-full max-w-[1440px] flex-1 px-4 lg:px-6">
         {/* Desktop sidebar */}
+        {activeView === "jobs" && (
         <aside className="hidden w-64 shrink-0 border-r border-border lg:block xl:w-72">
           <div className="sticky top-16 h-[calc(100vh-4rem)]">
             <FilterSidebar
@@ -292,9 +378,31 @@ export function JobDashboard() {
             />
           </div>
         </aside>
+        )}
 
         {/* Job listings */}
-        <main className="flex-1 py-5 lg:pl-6">
+        <main className={`flex-1 py-5 ${activeView === "jobs" ? "lg:pl-6" : ""}`}>
+          {activeView === "status" ? (
+            <>
+              <div className="mb-5">
+                <h2 className="text-sm font-medium text-foreground">
+                  Scraper status by company
+                </h2>
+              </div>
+              {isStatusLoading ? (
+                <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
+                  Loading scraper status...
+                </div>
+              ) : statusError ? (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-6 text-sm text-destructive">
+                  Failed to load scraper status: {statusError}
+                </div>
+              ) : (
+                <ScraperStatusTable statuses={scraperStatuses} />
+              )}
+            </>
+          ) : (
+            <>
           {/* Results header */}
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -392,6 +500,8 @@ export function JobDashboard() {
                 Clear all filters
               </Button>
             </div>
+          )}
+          </>
           )}
         </main>
       </div>

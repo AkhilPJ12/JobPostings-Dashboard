@@ -1,10 +1,8 @@
 /**
  * Accenture Jobs Scraper
  *
- * Scrapes job listings from Accenture Careers.
- * Accenture uses an Elastic Search API at /api/accenture/elastic/findjobs
- *
- * Usage: npx tsx scripts/scrape-accenture-jobs.ts
+ * Uses Accenture elastic API at /api/accenture/elastic/findjobs
+ * with required multipart payload.
  */
 
 import { chromium } from 'playwright'
@@ -20,8 +18,63 @@ import {
 const CONFIG = {
     companyName: 'Accenture',
     dateWindowDays: 14,
-    maxPages: 50,
+    maxPages: 80,
     pageSize: 20,
+}
+
+type AccentureApiJob = {
+    title?: string
+    requisitionId?: string
+    guid?: string
+    updateDate?: string
+    jobDetailUrl?: string
+    location?: string[]
+    feedCity?: string
+    businessArea?: string
+    function?: string[]
+    employeeType?: string
+    jobScheduleDescription?: string
+    jobTypeDescription?: string
+    jobDescription?: string
+    jobDescriptionClean?: string
+    qualification?: string
+    qualificationClean?: string
+    additionalInformation?: string
+    postedDateText?: string
+}
+
+function parseAccenturePostedDate(postedDateText: string | undefined, updateDate: string | undefined): string | null {
+    const raw = (postedDateText || '').trim()
+    if (raw) {
+        const today = /posted\s+today/i.test(raw)
+        if (today) return new Date().toISOString().split('T')[0]
+
+        const yesterday = /posted\s+yesterday/i.test(raw)
+        if (yesterday) {
+            const d = new Date()
+            d.setDate(d.getDate() - 1)
+            return d.toISOString().split('T')[0]
+        }
+
+        const daysAgo = raw.match(/posted\s+(\d+)\s+days?\s+ago/i)
+        if (daysAgo) {
+            const d = new Date()
+            d.setDate(d.getDate() - Number(daysAgo[1]))
+            return d.toISOString().split('T')[0]
+        }
+
+        const absolute = raw.replace(/^posted\s+/i, '').replace(/^on\s+/i, '').trim()
+        const parsedAbsolute = parsePostedDate(absolute)
+        if (parsedAbsolute) return parsedAbsolute
+    }
+
+    return parsePostedDate(updateDate || null)
+}
+
+function toListLocation(value: string[] | string | undefined): string {
+    if (Array.isArray(value) && value.length) return value.join(', ')
+    if (typeof value === 'string' && value.trim()) return value.trim()
+    return 'United States'
 }
 
 async function scrapeAccentureJobs() {
@@ -35,186 +88,177 @@ async function scrapeAccentureJobs() {
     const careerUrl = company.careers_url || 'https://www.accenture.com/us-en/careers/jobsearch'
     console.log(`🔗 Career URL: ${careerUrl}`)
 
-    console.log(`\n🌐 Launching browser...`)
     const browser = await chromium.launch({ headless: true })
     const context = await browser.newContext({
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        viewport: { width: 1280, height: 900 },
     })
     const page = await context.newPage()
 
     try {
-        console.log(`📄 Loading Accenture Careers page...`)
-        await page.goto(careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
-        await sleep(5000)
-
-        // Accept cookies
-        const cookieBtn = await page.$('button:has-text("Accept All"), button:has-text("Accept all")')
-        if (cookieBtn) {
-            await cookieBtn.click()
-            await sleep(2000)
-        }
-        console.log(`✅ Page loaded\n`)
+        await page.goto(careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
+        await sleep(2500)
 
         const collectedJobs: DbJob[] = []
         const seenIds = new Set<string>()
 
-        // Try to use the Elastic API from browser context
-        let pageNum = 0
         let totalHits = 0
+        let stalePages = 0
 
-        while (pageNum < CONFIG.maxPages) {
-            console.log(`📄 Page ${pageNum + 1}...`)
+        for (let pageNum = 0; pageNum < CONFIG.maxPages; pageNum++) {
+            const startIndex = pageNum * CONFIG.pageSize
+            console.log(`📄 Page ${pageNum + 1} (startIndex=${startIndex})...`)
 
-            const result = await page.evaluate(async ({ pageNum, pageSize }) => {
-                try {
-                    const resp = await fetch('/api/accenture/elastic/findjobs', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                        body: JSON.stringify({
-                            query: '',
-                            country: 'USA',
-                            page: pageNum,
-                            size: pageSize,
-                            sort: 'Newest',
-                        }),
-                    })
-                    if (!resp.ok) return { error: `HTTP ${resp.status}`, jobs: [], total: 0 }
-                    return await resp.json()
-                } catch (e: unknown) {
-                    return { error: String(e), jobs: [], total: 0 }
+            const result = await page.evaluate(async ({ startIndex, pageSize }) => {
+                const form = new FormData()
+                form.set('startIndex', String(startIndex))
+                form.set('maxResultSize', String(pageSize))
+                form.set('jobKeyword', '')
+                form.set('jobCountry', 'USA')
+                form.set('jobLanguage', 'en')
+                form.set('countrySite', 'us-en')
+                form.set('sortBy', '2')
+                form.set('searchType', 'vectorSearch')
+                form.set('enableQueryBoost', 'true')
+                form.set('minScore', '0.0')
+
+                const resp = await fetch('/api/accenture/elastic/findjobs', {
+                    method: 'POST',
+                    body: form,
+                })
+
+                if (!resp.ok) {
+                    return { ok: false, status: resp.status, data: [] as AccentureApiJob[], totalHits: 0 }
                 }
-            }, { pageNum, pageSize: CONFIG.pageSize }) as { error?: string; jobs?: unknown[]; total?: number; data?: unknown[]; totalHits?: number;[key: string]: unknown }
 
-            if (result.error) {
-                console.log(`   ⚠️ API error: ${result.error}, falling back to DOM scraping`)
+                const json = await resp.json() as { data?: AccentureApiJob[]; totalHits?: number }
+                return {
+                    ok: true,
+                    status: resp.status,
+                    data: json.data || [],
+                    totalHits: json.totalHits ?? 0,
+                }
+            }, { startIndex, pageSize: CONFIG.pageSize }) as {
+                ok: boolean
+                status: number
+                data: AccentureApiJob[]
+                totalHits: unknown
+            }
+
+            if (!result.ok) {
+                console.log(`   ⚠️ API error ${result.status}. Stopping.`)
                 break
             }
 
             if (pageNum === 0) {
-                totalHits = (result.total || result.totalHits || 0) as number
+                if (typeof result.totalHits === 'number') {
+                    totalHits = result.totalHits
+                } else if (result.totalHits && typeof result.totalHits === 'object' && 'value' in (result.totalHits as Record<string, unknown>)) {
+                    totalHits = Number((result.totalHits as Record<string, unknown>).value || 0)
+                } else {
+                    totalHits = 0
+                }
                 console.log(`📊 Total matching jobs: ${totalHits}`)
             }
 
-            const jobs = (result.jobs || result.data || []) as Record<string, unknown>[]
-            if (jobs.length === 0) {
-                console.log('📭 No more results. Done.')
+            if (!result.data.length) {
+                console.log('📭 No more jobs. Done.')
                 break
             }
 
-            let pageCollected = 0
-            for (const j of jobs) {
-                const id = String(j.jobId || j.id || j.requisitionId || '')
-                if (!id || seenIds.has(id)) continue
-                seenIds.add(id)
+            let newJobs = 0
+            let dateSkipped = 0
 
-                const title = String(j.title || j.jobTitle || '')
-                const location = String(j.location || j.city || '')
-                const desc = String(j.description || j.jobDescription || '')
-                const postedDate = parsePostedDate(j.postedDate as string || j.created as string || null)
+            for (const r of result.data) {
+                const reqId = String(r.requisitionId || r.guid || '').trim()
+                if (!reqId || seenIds.has(reqId)) continue
+                seenIds.add(reqId)
 
-                if (postedDate && !isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) continue
+                const postedDate = parseAccenturePostedDate(r.postedDateText, r.updateDate)
+                if (!postedDate) {
+                    dateSkipped++
+                    continue
+                }
+                if (!isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
+                    dateSkipped++
+                    continue
+                }
 
-                const fullText = `${title} ${desc} ${location}`
+                const title = (r.title || '').trim()
+                if (!title) continue
+
+                const location = toListLocation(r.location || r.feedCity)
+                const detailUrlRaw = r.jobDetailUrl || ''
+                const jobUrl = detailUrlRaw
+                    ? detailUrlRaw.replace('{0}', 'us-en')
+                    : `https://www.accenture.com/us-en/careers/jobdetails?id=${reqId}_en`
+
+                const description = cleanHtml([
+                    r.jobDescriptionClean || r.jobDescription || '',
+                    r.qualificationClean || r.qualification || '',
+                    r.additionalInformation || '',
+                ].filter(Boolean).join('\n\n'))
+
+                const department = [
+                    r.businessArea || '',
+                    ...(Array.isArray(r.function) ? r.function : []),
+                ].filter(Boolean).join(' / ') || 'General'
+
+                const fullText = `${title}\n${description}\n${location}`
 
                 const job: DbJob = {
                     company_id: company.id,
-                    external_job_id: `accenture_${id}`,
-                    title: title || 'Untitled',
-                    location: location || 'United States',
-                    location_type: determineLocationType(location, desc),
-                    department: String(j.department || j.skillGroup || 'General'),
-                    employment_type: determineEmploymentType(String(j.jobType || title)),
-                    posted_date: postedDate || new Date().toISOString().split('T')[0],
-                    description: cleanHtml(desc),
-                    summary: createSummary(desc),
+                    external_job_id: `accenture_${reqId}`,
+                    title: title.slice(0, 240),
+                    location: location.slice(0, 240),
+                    location_type: determineLocationType(location, description),
+                    department: department.slice(0, 240),
+                    employment_type: determineEmploymentType(`${r.employeeType || r.jobScheduleDescription || r.jobTypeDescription || ''} ${title}`),
+                    posted_date: postedDate,
+                    description,
+                    summary: createSummary(description),
                     required_qualifications: [],
                     preferred_qualifications: [],
-                    pay_range: extractPayRange(desc),
+                    pay_range: extractPayRange(description),
                     security_clearance: detectSecurityClearance(fullText),
                     h1b_sponsorship: detectH1BSponsorship(fullText),
-                    job_url: `https://www.accenture.com/us-en/careers/jobdetails?id=${id}`,
+                    job_url: jobUrl,
                     is_active: true,
                 }
+
                 collectedJobs.push(job)
-                pageCollected++
+                newJobs++
             }
 
-            console.log(`   ✅ ${pageCollected} collected (${collectedJobs.length} total)`)
+            console.log(`   ✅ ${newJobs} new jobs (${collectedJobs.length} total), ${dateSkipped} date-skipped`)
 
-            if (collectedJobs.length >= totalHits || jobs.length < CONFIG.pageSize) {
-                console.log('📭 All results processed. Done.')
+            if (newJobs === 0 && dateSkipped >= result.data.length) {
+                stalePages++
+                if (stalePages >= 3) {
+                    console.log('📭 Consecutive out-of-range pages reached. Stopping early.')
+                    break
+                }
+            } else {
+                stalePages = 0
+            }
+
+            if (result.data.length < CONFIG.pageSize) {
+                console.log('📭 Last page reached. Done.')
                 break
             }
 
-            pageNum++
-            const delay = randomDelay()
-            console.log(`   ⏳ Waiting ${(delay / 1000).toFixed(1)}s...`)
-            await sleep(delay)
-        }
-
-        // If API didn't work, fall back to DOM scraping
-        if (collectedJobs.length === 0) {
-            console.log('\n🔄 Falling back to DOM scraping...')
-            let scrollCount = 0
-            let prevCount = 0
-
-            while (scrollCount < CONFIG.maxPages) {
-                const domJobs = await page.evaluate(() => {
-                    const cards = Array.from(document.querySelectorAll('[class*="job-card"], [class*="jobCard"], .cmp-teaser'))
-                    return cards.map(card => {
-                        const title = card.querySelector('h3, h4, [class*="title"]')?.textContent?.trim() || ''
-                        const loc = card.querySelector('[class*="location"]')?.textContent?.trim() || ''
-                        const link = (card.querySelector('a') as HTMLAnchorElement)?.href || ''
-                        const idMatch = link.match(/(\d{6,7})/)
-                        return { id: idMatch?.[1] || '', title, location: loc, url: link, text: card.textContent || '' }
-                    }).filter(j => j.title)
-                })
-
-                let newJobs = 0
-                for (const j of domJobs) {
-                    if (!j.id || seenIds.has(j.id)) continue
-                    seenIds.add(j.id)
-
-                    const job: DbJob = {
-                        company_id: company.id,
-                        external_job_id: `accenture_${j.id}`,
-                        title: j.title,
-                        location: j.location || 'United States',
-                        location_type: determineLocationType(j.location, j.text),
-                        department: 'General',
-                        employment_type: determineEmploymentType(j.title),
-                        posted_date: new Date().toISOString().split('T')[0],
-                        description: cleanHtml(j.text),
-                        summary: `${j.title} at Accenture`,
-                        required_qualifications: [],
-                        preferred_qualifications: [],
-                        pay_range: extractPayRange(j.text),
-                        security_clearance: detectSecurityClearance(j.text),
-                        h1b_sponsorship: detectH1BSponsorship(j.text),
-                        job_url: j.url || careerUrl,
-                        is_active: true,
-                    }
-                    collectedJobs.push(job)
-                    newJobs++
-                }
-
-                console.log(`   Scroll ${scrollCount + 1}: ${newJobs} new (${collectedJobs.length} total)`)
-
-                if (collectedJobs.length === prevCount && scrollCount > 2) break
-                prevCount = collectedJobs.length
-
-                const showMore = await page.$('button:has-text("Show more"), [class*="load-more"]')
-                if (showMore) { await showMore.click(); await sleep(3000) }
-                else { await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await sleep(2000) }
-
-                scrollCount++
+            if (totalHits > 0 && startIndex + CONFIG.pageSize >= totalHits) {
+                console.log('📭 Reached total hit count. Done.')
+                break
             }
+
+            await sleep(randomDelay(1000, 2200))
         }
 
         console.log(`\n📊 Total jobs collected: ${collectedJobs.length}`)
 
         if (collectedJobs.length === 0) {
-            console.log('⚠️  No jobs found.')
+            console.log('⚠️  No jobs found with valid posting dates.')
             return
         }
 
@@ -222,7 +266,6 @@ async function scrapeAccentureJobs() {
         const upsertedCount = await upsertJobsBatch(collectedJobs)
         const dbCount = await getCompanyJobCount(company.id)
         logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
-
     } finally {
         await browser.close()
     }

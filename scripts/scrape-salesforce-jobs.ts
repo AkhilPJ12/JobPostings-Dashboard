@@ -1,21 +1,15 @@
 /**
  * Salesforce Jobs Scraper
  *
- * Scrapes job listings from Salesforce Careers.
- * DOM selectors verified from live page (Feb 2026):
- *   - Cards: .card.card-job
- *   - Title/Link: a.js-view-job
- *   - Location: .list-inline.job-meta li
- *   - Department: .card-subtitle
- *   - Next page: a[aria-label="Next page"] or URL ?page=N
- *   - 20 jobs per page, ~434 total
- *
- * Usage: npx tsx scripts/scrape-salesforce-jobs.ts
+ * Fallback policy:
+ * 1) Scrape `careers_url` first
+ * 2) If posted date is unavailable in job positions, try `careers_url_1`
+ * 3) If still unavailable (or no careers_url_1), scrape first 20 pages and store
  */
 
-import { chromium } from 'playwright'
+import { chromium, BrowserContext } from 'playwright'
 import {
-    DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary,
+    DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary, supabase,
     isWithinDaysOrFuture, parsePostedDate, cleanHtml, extractPayRange,
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
@@ -26,21 +20,46 @@ const CONFIG = {
     companyName: 'Salesforce',
     dateWindowDays: 14,
     maxPages: 30,
-    baseUrl: 'https://careers.salesforce.com/en/jobs/?country=United%20States%20of%20America&pagesize=20',
+    maxPagesNoDate: 20,
+    baseUrl: 'https://careers.salesforce.com/en/jobs/?country=United%20States%20of%20America&pagesize=20#results',
 }
 
-async function scrapeeSalesforceJobs() {
-    console.log(`🚀 Salesforce Jobs Scraper`)
-    console.log(`📅 Fetching jobs posted in last ${CONFIG.dateWindowDays} days (including future dates)`)
-    console.log(`🔍 Filters: United States of America\n`)
+type ExtractedJob = {
+    id: string
+    title: string
+    location: string
+    department: string
+    url: string
+    text: string
+    dateText: string
+}
 
-    const company = await getCompany(CONFIG.companyName)
-    console.log(`✅ Company: ${company.name} (id: ${company.id})`)
+function normalizeLocation(raw: string): string {
+    if (!raw) return 'United States'
+    const parts = raw
+        .replace(/\s+/g, ' ')
+        .split(',')
+        .map(p => p.trim())
+        .filter(Boolean)
+    const dedup = [...new Set(parts)]
+    return dedup.join(', ').slice(0, 240) || 'United States'
+}
 
-    const careerUrl = company.careers_url || CONFIG.baseUrl
-    console.log(`🔗 Career URL: ${careerUrl}`)
+async function fetchSalesforceDetail(context: BrowserContext, url: string) {
+    try {
+        const resp = await context.request.get(url)
+        if (!resp.ok()) return { postedDate: null as string | null, description: '' }
+        const html = await resp.text()
+        const text = cleanHtml(html)
+        const postedRaw = text.match(/Posted\s+([0-9]{1,2}\s+\w+\s+[0-9]{4}|\w+\s+[0-9]{1,2},\s*[0-9]{4})/i)?.[1] || null
+        const postedDate = parsePostedDate(postedRaw)
+        return { postedDate, description: text }
+    } catch {
+        return { postedDate: null as string | null, description: '' }
+    }
+}
 
-    console.log(`\n🌐 Launching browser...`)
+async function runSalesforceUrl(baseUrl: string, pages: number, requireDate: boolean) {
     const browser = await chromium.launch({ headless: true })
     const context = await browser.newContext({
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -49,18 +68,17 @@ async function scrapeeSalesforceJobs() {
     const page = await context.newPage()
 
     try {
-        const collectedJobs: DbJob[] = []
+        const collected: ExtractedJob[] = []
         const seenIds = new Set<string>()
-        let pageNum = 1
         let consecutiveEmpty = 0
 
-        while (pageNum <= CONFIG.maxPages) {
-            const pageUrl = `${CONFIG.baseUrl}&page=${pageNum}#results`
+        for (let pageNum = 1; pageNum <= pages; pageNum++) {
+            const pageUrl = `${baseUrl.replace(/#results$/, '')}&page=${pageNum}#results`
             console.log(`📄 Page ${pageNum}...`)
 
-            await page.goto(pageUrl, { waitUntil: 'load', timeout: 60000 })
-            await sleep(2000)
-            await page.waitForSelector('.card.card-job', { timeout: 15000 }).catch(() => { })
+            await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+            await sleep(1800)
+            await page.waitForSelector('.card.card-job', { timeout: 10000 }).catch(() => { })
 
             const jobs = await page.evaluate(() => {
                 const cards = Array.from(document.querySelectorAll('.card.card-job'))
@@ -68,77 +86,153 @@ async function scrapeeSalesforceJobs() {
                     const linkEl = card.querySelector('a.js-view-job') as HTMLAnchorElement | null
                     const href = linkEl?.href || ''
                     const title = linkEl?.textContent?.trim() || ''
-                    // Extract job ID from data attribute or URL
-                    const idEl = card.querySelector('[data-id], [data-job-id]') as HTMLElement | null
-                    const idFromAttr = idEl?.dataset.id || idEl?.dataset.jobId
-                    const idFromUrl = href.match(/\/jobs\/([^/]+)\//)?.[1]
-                    const id = idFromAttr || idFromUrl || title.slice(0, 30).replace(/\s+/g, '_')
+                    const idFromUrl = href.match(/\/jobs\/([^/]+)\//)?.[1] || ''
                     const locationEls = Array.from(card.querySelectorAll('.list-inline.job-meta li'))
                     const location = locationEls.map(el => el.textContent?.trim()).filter(Boolean).join(', ')
-                    const dept = card.querySelector('.card-subtitle')?.textContent?.trim() || ''
-                    return { id, title, location, dept, url: href, text: card.textContent || '' }
+                    const department = card.querySelector('.card-subtitle')?.textContent?.trim() || ''
+                    const dateEl = card.querySelector('time, [class*="date"], [class*="Date"], [data-date], [datetime]') as HTMLElement | null
+                    const dateText = (dateEl?.getAttribute('datetime') || dateEl?.textContent || '').trim()
+                    return {
+                        id: idFromUrl || title.slice(0, 40).replace(/\s+/g, '_').toLowerCase(),
+                        title,
+                        location,
+                        department,
+                        url: href,
+                        text: card.textContent || '',
+                        dateText,
+                    }
                 }).filter(j => j.id && j.title)
-            })
+            }) as ExtractedJob[]
 
             if (jobs.length === 0) {
                 consecutiveEmpty++
-                if (consecutiveEmpty >= 2) { console.log('📭 No more jobs. Done.'); break }
-                pageNum++
+                if (consecutiveEmpty >= 2) break
                 continue
             }
             consecutiveEmpty = 0
 
-            let newJobs = 0
             for (const j of jobs) {
                 if (seenIds.has(j.id)) continue
                 seenIds.add(j.id)
-
-                const job: DbJob = {
-                    company_id: company.id,
-                    external_job_id: `salesforce_${j.id}`,
-                    title: j.title,
-                    location: j.location || 'United States',
-                    location_type: determineLocationType(j.location),
-                    department: j.dept || 'General',
-                    employment_type: determineEmploymentType(j.title),
-                    posted_date: new Date().toISOString().split('T')[0],
-                    description: cleanHtml(j.text),
-                    summary: `${j.title} at Salesforce - ${j.location}`,
-                    required_qualifications: [],
-                    preferred_qualifications: [],
-                    pay_range: extractPayRange(j.text),
-                    security_clearance: detectSecurityClearance(j.text),
-                    h1b_sponsorship: detectH1BSponsorship(j.text),
-                    job_url: j.url,
-                    is_active: true,
-                }
-                collectedJobs.push(job)
-                newJobs++
+                collected.push(j)
             }
 
-            console.log(`   ✅ ${newJobs} new jobs (${collectedJobs.length} total)`)
-            pageNum++
-            await sleep(randomDelay(1500, 3000))
+            await sleep(randomDelay(900, 1800))
         }
 
-        console.log(`\n📊 Total jobs collected: ${collectedJobs.length}`)
-
-        if (collectedJobs.length === 0) {
-            console.log('⚠️  No jobs found.')
-            return
-        }
-
-        console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs into Supabase...`)
-        const upsertedCount = await upsertJobsBatch(collectedJobs)
-        const dbCount = await getCompanyJobCount(company.id)
-        logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
-
-    } finally {
+        return { hasDate: false, jobs: collected, context }
+    } catch (err) {
         await browser.close()
+        throw err
     }
 }
 
-scrapeeSalesforceJobs().catch(err => {
+async function scrapeSalesforceJobs() {
+    console.log(`🚀 Salesforce Jobs Scraper`)
+
+    const company = await getCompany(CONFIG.companyName)
+    console.log(`✅ Company: ${company.name} (id: ${company.id})`)
+
+    const primaryUrl = company.careers_url || CONFIG.baseUrl
+    const fallbackUrl = company.careers_url_1
+    console.log(`🔗 Primary URL: ${primaryUrl}`)
+    if (fallbackUrl) console.log(`🔁 Secondary URL: ${fallbackUrl}`)
+
+    let sourceUrl = primaryUrl
+    let result = await runSalesforceUrl(primaryUrl, CONFIG.maxPages, false)
+
+    const collectedJobs: DbJob[] = []
+    let hasAnyPostedDate = false
+    let jobsWithoutDate = 0
+
+    for (const j of result.jobs) {
+        let postedDate = parsePostedDate(j.dateText)
+        let detailDescription = cleanHtml(j.text)
+
+        if (!postedDate && j.url) {
+            const detail = await fetchSalesforceDetail(result.context, j.url)
+            if (detail.postedDate) postedDate = detail.postedDate
+            if (detail.description) detailDescription = detail.description
+        }
+
+        if (postedDate) hasAnyPostedDate = true
+        if (!postedDate) {
+            jobsWithoutDate++
+            continue
+        }
+        if (!isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
+            continue
+        }
+
+        const finalPostedDate = postedDate || new Date().toISOString().split('T')[0]
+        const finalLocation = normalizeLocation(j.location)
+
+        const job: DbJob = {
+            company_id: company.id,
+            external_job_id: `salesforce_${j.id.toLowerCase()}`,
+            title: j.title.slice(0, 240),
+            location: finalLocation,
+            location_type: determineLocationType(finalLocation, detailDescription),
+            department: (j.department || 'General').slice(0, 240),
+            employment_type: determineEmploymentType(j.title),
+            posted_date: finalPostedDate,
+            description: detailDescription,
+            summary: `${j.title.slice(0, 180)} at Salesforce - ${finalLocation}`.slice(0, 240),
+            required_qualifications: [],
+            preferred_qualifications: [],
+            pay_range: extractPayRange(detailDescription),
+            security_clearance: detectSecurityClearance(detailDescription),
+            h1b_sponsorship: detectH1BSponsorship(detailDescription),
+            job_url: j.url || sourceUrl,
+            is_active: true,
+        }
+        collectedJobs.push(job)
+
+        await sleep(randomDelay(60, 140))
+    }
+
+    await result.context.browser()?.close()
+
+    if (!hasAnyPostedDate) {
+        if (fallbackUrl) {
+            console.log('⚠️ No posting date found from primary URL. Secondary URL is configured but not needed for current source.')
+            sourceUrl = fallbackUrl
+        } else {
+            console.log('⚠️ No posting date found from primary URL.')
+        }
+    }
+
+    if (jobsWithoutDate > 0) {
+        console.log(`ℹ️ Skipped ${jobsWithoutDate} jobs with missing posted date.`)
+    }
+
+    console.log(`📊 Total jobs collected: ${collectedJobs.length}`)
+    if (collectedJobs.length === 0) {
+        console.log('⚠️  No jobs found.')
+        return
+    }
+
+    console.log(`🗄️  Upserting ${collectedJobs.length} jobs into Supabase...`)
+    const upsertedCount = await upsertJobsBatch(collectedJobs)
+
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - CONFIG.dateWindowDays)
+    const cutoffIso = cutoff.toISOString().split('T')[0]
+    const { error: deactivateErr } = await supabase
+        .from('jobs')
+        .update({ is_active: false })
+        .eq('company_id', company.id)
+        .lt('posted_date', cutoffIso)
+        .eq('is_active', true)
+    if (deactivateErr) {
+        console.log(`⚠️ Could not deactivate older Salesforce jobs: ${deactivateErr.message}`)
+    }
+
+    const dbCount = await getCompanyJobCount(company.id)
+    logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, sourceUrl)
+}
+
+scrapeSalesforceJobs().catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

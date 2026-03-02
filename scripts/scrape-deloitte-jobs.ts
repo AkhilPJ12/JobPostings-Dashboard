@@ -1,10 +1,10 @@
 /**
  * Deloitte Jobs Scraper
  *
- * Scrapes job listings from Deloitte Careers.
- * Deloitte uses server-side rendering — DOM scraping with Playwright.
- *
- * Usage: npx tsx scripts/scrape-deloitte-jobs.ts
+ * Fallback policy:
+ * 1) Scrape `careers_url` first
+ * 2) If posted date is unavailable in job positions, try `careers_url_1`
+ * 3) If still unavailable (or no careers_url_1), scrape first 20 pages and store
  */
 
 import { chromium } from 'playwright'
@@ -20,22 +20,78 @@ import {
 const CONFIG = {
     companyName: 'Deloitte',
     dateWindowDays: 14,
-    maxPages: 100,
-    pageSize: 25,
+    pageSize: 10,
+    maxPages: 80,
+    maxPagesNoDate: 20,
 }
 
-async function scrapeDeloitteJobs() {
-    console.log(`🚀 Deloitte Jobs Scraper`)
-    console.log(`📅 Fetching jobs posted in the last ${CONFIG.dateWindowDays} days`)
-    console.log(`🔍 Filters: US\n`)
+type ListCard = {
+    id: string
+    title: string
+    url: string
+    locationLine: string
+}
 
-    const company = await getCompany(CONFIG.companyName)
-    console.log(`✅ Company: ${company.name} (id: ${company.id})`)
+type JobDetailData = {
+    datePosted: string | null
+    description: string
+}
 
-    const careerUrl = company.careers_url || 'https://apply.deloitte.com/en_US/careers/SearchJobs/?jobSort=relevancy&jobRecordsPerPage=10&jobOffset=0'
-    console.log(`🔗 Career URL: ${careerUrl}`)
+function parseLocationAndDepartment(line: string): { location: string; department: string } {
+    const compact = line.replace(/\s+/g, ' ').trim()
+    if (!compact) return { location: 'United States', department: 'General' }
+    const parts = compact.split('|').map(p => p.trim()).filter(Boolean)
+    return {
+        location: parts.length > 0 ? parts[parts.length - 1] : compact,
+        department: parts.length > 1 ? parts[1] : 'General',
+    }
+}
 
-    console.log(`\n🌐 Launching browser...`)
+function buildListUrl(baseSearchUrl: string, offset: number): string {
+    if (/jobOffset=\d+/i.test(baseSearchUrl)) {
+        return baseSearchUrl.replace(/jobOffset=\d+/i, `jobOffset=${offset}`)
+    }
+    const sep = baseSearchUrl.includes('?') ? '&' : '?'
+    return `${baseSearchUrl}${sep}jobOffset=${offset}`
+}
+
+function extractJobDetailData(html: string): JobDetailData {
+    let datePosted: string | null = null
+    let description = ''
+
+    const regex = /<script\s+type="application\/ld\+json">([\s\S]*?)<\/script>/gi
+    let match: RegExpExecArray | null
+
+    while ((match = regex.exec(html)) !== null) {
+        const raw = match[1]?.trim()
+        if (!raw) continue
+        try {
+            const parsed = JSON.parse(raw)
+            const entries = Array.isArray(parsed) ? parsed : [parsed]
+            for (const e of entries) {
+                if (!e || typeof e !== 'object') continue
+                const p = e as Record<string, unknown>
+                if ((p['@type'] === 'JobPosting' || p['datePosted']) && !datePosted) {
+                    datePosted = parsePostedDate(String(p['datePosted'] || ''))
+                    if (typeof p['description'] === 'string') {
+                        description = cleanHtml(p['description'])
+                    }
+                }
+            }
+        } catch {
+            // Ignore malformed JSON-LD blobs.
+        }
+    }
+
+    return { datePosted, description }
+}
+
+async function runDeloitteSource(
+    companyId: number,
+    sourceUrl: string,
+    pages: number,
+    requireDate: boolean,
+) {
     const browser = await chromium.launch({ headless: true })
     const context = await browser.newContext({
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -43,109 +99,149 @@ async function scrapeDeloitteJobs() {
     const page = await context.newPage()
 
     try {
-        console.log(`📄 Loading Deloitte Careers page...`)
-        await page.goto(careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
-        await sleep(5000)
-
-        // Accept cookies
-        const cookieBtn = await page.$('button:has-text("Accept"), button:has-text("Accept All"), [class*="cookie-accept"]')
-        if (cookieBtn) {
-            await cookieBtn.click()
-            await sleep(2000)
-        }
-        console.log(`✅ Page loaded\n`)
-
-        const collectedJobs: DbJob[] = []
         const seenIds = new Set<string>()
-        let offset = 0
+        const collectedJobs: DbJob[] = []
+        let hasAnyDate = false
+        let stalePages = 0
 
-        while (offset < CONFIG.maxPages * CONFIG.pageSize) {
-            const pageNum = Math.floor(offset / CONFIG.pageSize) + 1
+        for (let pageNum = 1; pageNum <= pages; pageNum++) {
+            const offset = (pageNum - 1) * CONFIG.pageSize
+            const listUrl = buildListUrl(sourceUrl, offset)
             console.log(`📄 Page ${pageNum} (offset=${offset})...`)
 
-            // Navigate to the offset page
-            const pageUrl = careerUrl.replace(/jobOffset=\d+/, `jobOffset=${offset}`)
-            if (offset > 0) {
-                await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: 30000 })
-                await sleep(3000)
-            }
+            await page.goto(listUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+            await sleep(1400)
 
-            // Extract jobs from DOM
-            const jobs = await page.evaluate(() => {
-                const cards = Array.from(document.querySelectorAll('.job-result, [class*="job-card"], [class*="jobResult"], tr[class*="job"], a[href*="JobDetail"]'))
-                return cards.map(card => {
-                    const link = card.querySelector('a[href*="JobDetail"]') || card.querySelector('a') || card.closest('a')
-                    const href = (link as HTMLAnchorElement)?.href || ''
-                    const idMatch = href.match(/\/(\d{5,6})(?:[/?]|$)/)
+            const cards = await page.evaluate(() => {
+                const nodes = Array.from(document.querySelectorAll('.article--result'))
+                return nodes.map(node => {
+                    const link = node.querySelector("a[href*='JobDetail']") as HTMLAnchorElement | null
+                    const title = link?.textContent?.trim() || ''
+                    const url = link?.href || ''
+                    const idMatch = url.match(/\/(\d+)(?:\?|$)/)
                     const id = idMatch ? idMatch[1] : ''
-                    const title = card.querySelector('h2, h3, h4, a, [class*="title"]')?.textContent?.trim() || ''
-                    const location = card.querySelector('[class*="location"]')?.textContent?.trim() || ''
-                    const date = card.querySelector('[class*="date"]')?.textContent?.trim() || ''
-                    const text = card.textContent || ''
+                    const locationLine = (node.querySelector('.article__header--locations')?.textContent || '').trim()
+                    return { id, title, url, locationLine }
+                }).filter(j => j.id && j.title && j.url)
+            }) as ListCard[]
 
-                    return { id, title, location, date, url: href, text }
-                }).filter(j => j.title)
-            })
+            if (cards.length === 0) break
 
-            if (jobs.length === 0) {
-                console.log('📭 No more jobs. Done.')
-                break
-            }
+            let pageAdded = 0
+            let pageDateSkipped = 0
 
-            let newJobs = 0
-            for (const j of jobs) {
-                const jobId = j.id || `${j.title.replace(/\s/g, '_').slice(0, 20)}_${offset}`
-                if (seenIds.has(jobId)) continue
-                seenIds.add(jobId)
+            for (const c of cards) {
+                if (seenIds.has(c.id)) continue
+                seenIds.add(c.id)
 
-                const postedDate = parsePostedDate(j.date)
+                const resp = await context.request.get(c.url)
+                if (!resp.ok()) continue
+
+                const html = await resp.text()
+                const detail = extractJobDetailData(html)
+                if (detail.datePosted) hasAnyDate = true
+
+                if (requireDate && (!detail.datePosted || !isWithinDaysOrFuture(detail.datePosted, CONFIG.dateWindowDays))) {
+                    pageDateSkipped++
+                    continue
+                }
+
+                const meta = parseLocationAndDepartment(c.locationLine)
+                const description = detail.description || cleanHtml(c.title)
+                const postedDate = detail.datePosted || new Date().toISOString().split('T')[0]
+                const fullText = `${c.title}\n${description}`
 
                 const job: DbJob = {
-                    company_id: company.id,
-                    external_job_id: `deloitte_${jobId}`,
-                    title: j.title,
-                    location: j.location || 'United States',
-                    location_type: determineLocationType(j.location, j.text),
-                    department: 'General',
-                    employment_type: determineEmploymentType(j.title),
-                    posted_date: postedDate || new Date().toISOString().split('T')[0],
-                    description: cleanHtml(j.text),
-                    summary: `${j.title} at Deloitte - ${j.location}`,
+                    company_id: companyId,
+                    external_job_id: `deloitte_${c.id}`,
+                    title: c.title,
+                    location: meta.location,
+                    location_type: determineLocationType(meta.location, description),
+                    department: meta.department,
+                    employment_type: determineEmploymentType(c.title),
+                    posted_date: postedDate,
+                    description,
+                    summary: createSummary(description),
                     required_qualifications: [],
                     preferred_qualifications: [],
-                    pay_range: extractPayRange(j.text),
-                    security_clearance: detectSecurityClearance(j.text),
-                    h1b_sponsorship: detectH1BSponsorship(j.text),
-                    job_url: j.url || careerUrl,
+                    pay_range: extractPayRange(description),
+                    security_clearance: detectSecurityClearance(fullText),
+                    h1b_sponsorship: detectH1BSponsorship(fullText),
+                    job_url: c.url,
                     is_active: true,
                 }
                 collectedJobs.push(job)
-                newJobs++
+                pageAdded++
+                await sleep(60)
             }
 
-            console.log(`   ✅ ${newJobs} new jobs (${collectedJobs.length} total)`)
+            console.log(`   ✅ ${pageAdded} new jobs (${collectedJobs.length} total), ${pageDateSkipped} date-skipped`)
 
-            offset += CONFIG.pageSize
-            const delay = randomDelay()
-            console.log(`   ⏳ Waiting ${(delay / 1000).toFixed(1)}s...`)
-            await sleep(delay)
+            if (requireDate && pageAdded === 0 && pageDateSkipped >= cards.length) {
+                stalePages++
+                if (stalePages >= 3) {
+                    console.log('📭 Consecutive out-of-range pages reached. Stopping early.')
+                    break
+                }
+            } else {
+                stalePages = 0
+            }
+
+            if (cards.length < CONFIG.pageSize) break
+            await sleep(randomDelay(1000, 1800))
         }
 
-        console.log(`\n📊 Total jobs collected: ${collectedJobs.length}`)
-
-        if (collectedJobs.length === 0) {
-            console.log('⚠️  No jobs found.')
-            return
+        if (requireDate && !hasAnyDate) {
+            return { hasDate: false, jobs: [] as DbJob[] }
         }
-
-        console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs into Supabase...`)
-        const upsertedCount = await upsertJobsBatch(collectedJobs)
-        const dbCount = await getCompanyJobCount(company.id)
-        logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
-
+        return { hasDate: hasAnyDate, jobs: collectedJobs }
     } finally {
         await browser.close()
     }
+}
+
+async function scrapeDeloitteJobs() {
+    console.log(`🚀 Deloitte Jobs Scraper`)
+    const company = await getCompany(CONFIG.companyName)
+    console.log(`✅ Company: ${company.name} (id: ${company.id})`)
+
+    const primaryUrl = company.careers_url || 'https://apply.deloitte.com/en_US/careers/SearchJobs/?jobSort=relevancy&jobRecordsPerPage=10&jobOffset=0'
+    const secondaryUrl = company.careers_url_1
+
+    console.log(`🔗 Primary URL: ${primaryUrl}`)
+    if (secondaryUrl) console.log(`🔁 Secondary URL: ${secondaryUrl}`)
+
+    let sourceUrl = primaryUrl
+    let result = await runDeloitteSource(company.id, primaryUrl, CONFIG.maxPages, true)
+
+    if (!result.hasDate) {
+        console.log('⚠️ No posting date in primary jobs.')
+        if (secondaryUrl) {
+            sourceUrl = secondaryUrl
+            const second = await runDeloitteSource(company.id, secondaryUrl, CONFIG.maxPages, true)
+            if (second.hasDate) {
+                console.log('✅ Using secondary URL with posting dates.')
+                result = second
+            } else {
+                console.log('⚠️ Secondary URL also has no posting dates. Using first 20 pages.')
+                result = await runDeloitteSource(company.id, secondaryUrl, CONFIG.maxPagesNoDate, false)
+            }
+        } else {
+            console.log('⚠️ No secondary URL. Using first 20 pages from primary URL.')
+            result = await runDeloitteSource(company.id, primaryUrl, CONFIG.maxPagesNoDate, false)
+        }
+    }
+
+    console.log(`📊 Total jobs collected: ${result.jobs.length}`)
+    if (result.jobs.length === 0) {
+        console.log('⚠️  No jobs found.')
+        return
+    }
+
+    console.log(`🗄️  Upserting ${result.jobs.length} jobs...`)
+    const upsertedCount = await upsertJobsBatch(result.jobs)
+    const dbCount = await getCompanyJobCount(company.id)
+    logSummary(CONFIG.companyName, result.jobs.length, upsertedCount, dbCount, sourceUrl)
 }
 
 scrapeDeloitteJobs().catch(err => {

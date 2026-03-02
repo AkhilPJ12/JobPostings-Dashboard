@@ -5,17 +5,18 @@
  * Can also run individual scrapers by passing company name as argument.
  *
  * Usage:
- *   npx tsx scripts/scrape-all-jobs.ts           # Run all scrapers
+ *   npx tsx scripts/scrape-all-jobs.ts            # Run all scrapers
  *   npx tsx scripts/scrape-all-jobs.ts microsoft  # Run single scraper
  */
 
-import { execSync } from 'child_process'
+import { spawn } from 'child_process'
 import * as path from 'path'
+import { supabase } from './scraper-utils'
 
 const SCRAPERS = [
     { name: 'Amazon', script: 'scrape-amazon-jobs.ts' },
-    { name: 'Microsoft', script: 'scrape-pcsx-jobs.ts', args: 'microsoft' },
-    { name: 'Nvidia', script: 'scrape-pcsx-jobs.ts', args: 'nvidia' },
+    { name: 'Microsoft', script: 'scrape-pcsx-jobs.ts', args: ['microsoft'] },
+    { name: 'Nvidia', script: 'scrape-pcsx-jobs.ts', args: ['nvidia'] },
     { name: 'Google', script: 'scrape-google-jobs.ts' },
     { name: 'Meta', script: 'scrape-meta-jobs.ts' },
     { name: 'Apple', script: 'scrape-apple-jobs.ts' },
@@ -27,45 +28,133 @@ const SCRAPERS = [
     { name: 'Deloitte', script: 'scrape-deloitte-jobs.ts' },
 ]
 
+type RunStatus = 'Successful' | 'Error' | 'Partial'
+
 interface ScraperResult {
     name: string
+    status: RunStatus
     success: boolean
     duration: number
     error?: string
 }
 
-async function runScraper(scraper: typeof SCRAPERS[0]): Promise<ScraperResult> {
+interface CommandResult {
+    code: number | null
+    output: string
+    errorOutput: string
+    timedOut: boolean
+}
+
+function runCommand(command: string, args: string[], cwd: string, timeoutMs: number): Promise<CommandResult> {
+    return new Promise((resolve) => {
+        const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+        let output = ''
+        let errorOutput = ''
+        let timedOut = false
+
+        const timer = setTimeout(() => {
+            timedOut = true
+            child.kill('SIGTERM')
+        }, timeoutMs)
+
+        child.stdout.on('data', (chunk: Buffer) => {
+            const text = chunk.toString()
+            output += text
+            process.stdout.write(text)
+        })
+
+        child.stderr.on('data', (chunk: Buffer) => {
+            const text = chunk.toString()
+            errorOutput += text
+            process.stderr.write(text)
+        })
+
+        child.on('close', (code) => {
+            clearTimeout(timer)
+            resolve({ code, output, errorOutput, timedOut })
+        })
+    })
+}
+
+function deriveStatus(result: CommandResult): RunStatus {
+    if (result.timedOut) return 'Partial'
+    if (result.code !== 0) return 'Error'
+
+    const combined = `${result.output}\n${result.errorOutput}`
+    if (/No jobs found/i.test(combined) || /with valid posting dates/i.test(combined)) {
+        return 'Partial'
+    }
+    return 'Successful'
+}
+
+async function persistRun(args: {
+    companyName: string
+    runGroupId: string
+    status: RunStatus
+    startedAt: string
+    completedAt: string
+    durationSeconds: number
+    errorMessage: string | null
+}) {
+    const { error } = await supabase
+        .from('scraper_runs')
+        .upsert({
+            company_name: args.companyName,
+            run_group_id: args.runGroupId,
+            status: args.status,
+            started_at: args.startedAt,
+            completed_at: args.completedAt,
+            duration_seconds: args.durationSeconds,
+            error_message: args.errorMessage,
+        }, { onConflict: 'company_name' })
+
+    if (error) {
+        console.warn(`⚠️ Could not persist run status for ${args.companyName}: ${error.message}`)
+    }
+}
+
+async function runScraper(scraper: typeof SCRAPERS[0], runGroupId: string): Promise<ScraperResult> {
     const start = Date.now()
+    const startedAt = new Date(start).toISOString()
     const scriptPath = path.join(__dirname, scraper.script)
-    const cmd = `npx tsx ${scriptPath}${scraper.args ? ` ${scraper.args}` : ''}`
+    const args = ['tsx', scriptPath, ...(scraper.args || [])]
+    const cmdLabel = `npx ${args.join(' ')}`
 
     console.log(`\n${'═'.repeat(60)}`)
     console.log(`🏢 Running ${scraper.name} scraper...`)
-    console.log(`   Command: ${cmd}`)
+    console.log(`   Command: ${cmdLabel}`)
     console.log(`${'═'.repeat(60)}\n`)
 
-    try {
-        execSync(cmd, {
-            stdio: 'inherit',
-            cwd: path.resolve(__dirname, '..'),
-            timeout: 600000, // 10 minute timeout per scraper
-        })
+    const commandResult = await runCommand('npx', args, path.resolve(__dirname, '..'), 600000)
+    const duration = Math.round((Date.now() - start) / 1000)
+    const completedAt = new Date().toISOString()
+    const status = deriveStatus(commandResult)
+    const error = commandResult.code === 0 && !commandResult.timedOut
+        ? undefined
+        : (commandResult.errorOutput.trim() || `Process exited with code ${commandResult.code}`)
 
-        const duration = Math.round((Date.now() - start) / 1000)
-        return { name: scraper.name, success: true, duration }
-    } catch (error) {
-        const duration = Math.round((Date.now() - start) / 1000)
-        return {
-            name: scraper.name,
-            success: false,
-            duration,
-            error: error instanceof Error ? error.message : String(error),
-        }
+    await persistRun({
+        companyName: scraper.name,
+        runGroupId,
+        status,
+        startedAt,
+        completedAt,
+        durationSeconds: duration,
+        errorMessage: error || null,
+    })
+
+    return {
+        name: scraper.name,
+        status,
+        success: status !== 'Error',
+        duration,
+        error,
     }
 }
 
 async function main() {
     const filterArg = process.argv[2]?.toLowerCase()
+    const runGroupId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
     let scrapersToRun = SCRAPERS
 
@@ -84,43 +173,47 @@ async function main() {
 
     console.log(`🚀 Job Scraper Master Runner`)
     console.log(`📋 Running ${scrapersToRun.length} scraper(s): ${scrapersToRun.map(s => s.name).join(', ')}`)
+    console.log(`🧾 Run Group ID: ${runGroupId}`)
     console.log(`📅 Started: ${new Date().toLocaleString()}\n`)
 
     const results: ScraperResult[] = []
 
     for (const scraper of scrapersToRun) {
-        const result = await runScraper(scraper)
+        const result = await runScraper(scraper, runGroupId)
         results.push(result)
 
-        if (result.success) {
-            console.log(`\n✅ ${result.name}: Completed in ${result.duration}s`)
+        if (result.status === 'Successful') {
+            console.log(`\n✅ ${result.name}: Successful in ${result.duration}s`)
+        } else if (result.status === 'Partial') {
+            console.log(`\n⚠️ ${result.name}: Partial in ${result.duration}s`)
         } else {
             console.log(`\n❌ ${result.name}: Failed after ${result.duration}s`)
             console.log(`   Error: ${result.error?.slice(0, 200)}`)
         }
     }
 
-    // Print summary
     console.log(`\n\n${'═'.repeat(60)}`)
     console.log(`📊 MASTER SUMMARY`)
     console.log(`${'═'.repeat(60)}`)
     console.log(`📅 Completed: ${new Date().toLocaleString()}`)
     console.log(``)
 
-    const succeeded = results.filter(r => r.success)
-    const failed = results.filter(r => !r.success)
+    const successful = results.filter(r => r.status === 'Successful')
+    const partial = results.filter(r => r.status === 'Partial')
+    const failed = results.filter(r => r.status === 'Error')
     const totalDuration = results.reduce((sum, r) => sum + r.duration, 0)
 
-    console.log(`✅ Succeeded: ${succeeded.length}/${results.length}`)
-    for (const r of succeeded) {
-        console.log(`   ✅ ${r.name} (${r.duration}s)`)
+    console.log(`✅ Successful: ${successful.length}/${results.length}`)
+    successful.forEach((r) => console.log(`   ✅ ${r.name} (${r.duration}s)`))
+
+    if (partial.length > 0) {
+        console.log(`\n⚠️ Partial: ${partial.length}/${results.length}`)
+        partial.forEach((r) => console.log(`   ⚠️ ${r.name} (${r.duration}s)`))
     }
 
     if (failed.length > 0) {
         console.log(`\n❌ Failed: ${failed.length}/${results.length}`)
-        for (const r of failed) {
-            console.log(`   ❌ ${r.name}: ${r.error?.slice(0, 100)}`)
-        }
+        failed.forEach((r) => console.log(`   ❌ ${r.name}: ${r.error?.slice(0, 100)}`))
     }
 
     console.log(`\n⏱️  Total runtime: ${Math.round(totalDuration / 60)}m ${totalDuration % 60}s`)

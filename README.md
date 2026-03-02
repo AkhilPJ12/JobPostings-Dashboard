@@ -1,248 +1,255 @@
-# JobPostings-Dashboard
+# JobPostings Dashboard
 
-A modern, feature-rich job listings dashboard built with Next.js 16, React 19, TypeScript, and TailwindCSS. This application provides a beautiful, responsive interface for browsing and filtering job postings from top tech companies.
+A Next.js + Supabase job aggregation dashboard with company-specific scrapers.
 
-![Job Dashboard](https://img.shields.io/badge/Next.js-16.1.6-black?style=flat-square&logo=next.js)
-![React](https://img.shields.io/badge/React-19.2.3-blue?style=flat-square&logo=react)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.7.3-blue?style=flat-square&logo=typescript)
-![TailwindCSS](https://img.shields.io/badge/TailwindCSS-3.4.17-38B2AC?style=flat-square&logo=tailwind-css)
+This project has two core parts:
+- Web app to browse/filter job postings.
+- Scraper pipeline that fetches jobs from company career sites/APIs and upserts into DB.
 
-## ✨ Features
+## Architecture
 
-- **🔍 Advanced Search**: Real-time search across job titles, companies, descriptions, and departments with debounced input
-- **🎯 Smart Filtering**: Filter jobs by:
-  - Companies (10 top tech companies)
-  - Location types (Remote, Hybrid, Onsite)
-  - Departments (Engineering, Product, Design, Sales, Marketing, Operations, Data Science, DevOps)
-  - Date posted (Today, Last 7 days, Last 30 days, All)
-  - Employment types (Full-time, Part-time, Contract, Internship)
-- **📊 Multiple Sort Options**: Sort by most recent, company name, or job title
-- **📱 Responsive Design**: Fully responsive with mobile-optimized filter sidebar
-- **🌓 Dark/Light Mode**: Theme toggle with system preference support
-- **📄 Pagination**: Clean pagination with 12 jobs per page
-- **💼 Detailed Job Views**: Individual job detail pages with comprehensive information
-- **🎨 Modern UI**: Built with Radix UI components and custom styling
-- **⚡ Performance**: Optimized with Next.js Turbopack for fast development
-
-## 🏗️ Project Structure
-
-```
-JobPostings-Dashboard/
-├── app/                          # Next.js app directory
-│   ├── globals.css              # Global styles and CSS variables
-│   ├── layout.tsx               # Root layout with theme provider
-│   ├── page.tsx                 # Home page (job dashboard)
-│   └── jobs/
-│       └── [id]/                # Dynamic job detail pages
-├── components/                   # React components
-│   ├── filter-sidebar.tsx       # Filter controls sidebar
-│   ├── job-card.tsx             # Individual job card component
-│   ├── job-dashboard.tsx        # Main dashboard component
-│   ├── job-detail-content.tsx   # Job detail page content
-│   ├── job-pagination.tsx       # Pagination component
-│   ├── theme-provider.tsx       # Theme context provider
-│   ├── theme-toggle.tsx         # Dark/light mode toggle
-│   └── ui/                      # Shadcn UI components
-├── lib/                          # Utility functions and data
-│   ├── job-data.ts              # Job listings data and utilities
-│   └── utils.ts                 # Helper functions
-├── styles/                       # Additional stylesheets
-├── hooks/                        # Custom React hooks
-├── next.config.mjs              # Next.js configuration
-├── tailwind.config.ts           # TailwindCSS configuration
-├── tsconfig.json                # TypeScript configuration
-└── package.json                 # Project dependencies
+```mermaid
+flowchart TD
+  A[Company Career Sites / APIs] --> B[Company Scrapers in scripts/]
+  B --> C[scraper-utils.ts\nnormalization + filtering + upsert]
+  C --> D[(Supabase: jobs, companies)]
+  B --> E[scrape-all-jobs.ts]
+  E --> F[(Supabase: scraper_runs)]
+  D --> G[Next.js app\napp/page.tsx]
+  F --> G
 ```
 
-## 🚀 Getting Started
+## Tech Stack
 
-### Prerequisites
+- Next.js 16 (App Router)
+- React 19
+- TypeScript
+- Tailwind CSS + Radix UI
+- Supabase (Postgres + JS client)
+- Playwright (browser-driven scrapers)
+- `tsx` (run TS scripts directly)
 
-- **Node.js**: Version 18.x or higher
-- **Package Manager**: pnpm (recommended), npm, or yarn
+## Repository Structure
 
-### Installation
+```text
+app/
+  page.tsx                     # Dashboard entry
+  jobs/[id]/page.tsx           # Job detail
+components/
+  job-dashboard.tsx            # Jobs + Status views
+  scraper-status-table.tsx     # Scraper status table
+lib/
+  job-data.ts                  # Frontend data access
+  supabase.ts                  # Supabase client + DB types
+scripts/
+  scrape-all-jobs.ts           # Master runner
+  scrape-*.ts                  # Company scrapers
+  scraper-utils.ts             # Shared scraper helpers
+scripts/sql/
+  create-scraper-runs.sql      # SQL for scraper status table
+```
 
-1. **Clone the repository** (if not already done):
-   ```bash
-   git clone <repository-url>
-   cd JobPostings-Dashboard
-   ```
+## Database Model
 
-2. **Install dependencies**:
-   ```bash
-   # Using pnpm (recommended)
-   pnpm install
+Primary tables used by app/scrapers:
+- `companies`
+- `jobs`
+- `scraper_runs`
 
-   # Or using npm
-   npm install
+`jobs` stores normalized postings with unique `external_job_id` per source job.
 
-   # Or using yarn
-   yarn install
-   ```
+`scraper_runs` stores latest scraper execution state per company:
+- `company_name`
+- `status` (`Successful` | `Error` | `Partial`)
+- `started_at`
+- `completed_at`
+- `duration_seconds`
+- `error_message`
+- `run_group_id`
 
-### Running the Development Server
+Important behavior:
+- `scrape-all-jobs.ts` uses `upsert(..., { onConflict: 'company_name' })`.
+- This means one row per company in `scraper_runs`, updated on rerun.
 
-Start the development server with Turbopack:
+## Prerequisites
+
+- Node.js 18+
+- npm (or pnpm/yarn; commands below use npm)
+- Supabase project with required tables
+
+## Environment Variables
+
+Create `.env.local` in repo root:
 
 ```bash
-# Using pnpm
-pnpm dev
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+```
 
-# Or using npm
+These are required by app and scrapers.
+
+## Setup
+
+```bash
+npm install
+```
+
+## Create Scraper Status Table
+
+Run this SQL once in Supabase SQL Editor:
+
+- `scripts/sql/create-scraper-runs.sql`
+
+It creates table + indexes + unique index on `company_name`.
+
+## Run the Web App
+
+Development:
+
+```bash
 npm run dev
-
-# Or using yarn
-yarn dev
 ```
 
-The application will be available at **[http://localhost:3000](http://localhost:3000)**
+Open `http://localhost:3000`.
 
-### Building for Production
+Production build:
 
 ```bash
-# Build the application
-pnpm build
-
-# Start the production server
-pnpm start
+npm run build
+npm run start
 ```
 
-### Linting
+## Run Scrapers
+
+### Run all scrapers (recommended)
 
 ```bash
-pnpm lint
+npx tsx scripts/scrape-all-jobs.ts
 ```
 
-### Testing
+This:
+- runs all company scrapers sequentially,
+- upserts jobs into `jobs`,
+- updates each company row in `scraper_runs`.
 
-Run the test suite:
+### Run one scraper from master runner
 
 ```bash
-# Run all tests
+npx tsx scripts/scrape-all-jobs.ts microsoft
+npx tsx scripts/scrape-all-jobs.ts amazon
+```
+
+### Run individual scraper directly
+
+```bash
+npx tsx scripts/scrape-amazon-jobs.ts
+npx tsx scripts/scrape-google-jobs.ts
+npx tsx scripts/scrape-deloitte-jobs.ts
+```
+
+Note:
+- Individual scraper scripts update `jobs`.
+- `scraper_runs` is updated by `scrape-all-jobs.ts` (master runner).
+
+## Supported Companies (Current)
+
+- Amazon
+- Microsoft (PCSX)
+- Nvidia (PCSX / Workday path)
+- Google
+- Meta
+- Apple
+- IBM
+- Salesforce
+- Accenture
+- Visa
+- JPMorgan Chase
+- Deloitte
+
+## Scraper Rules Implemented
+
+Common policy in this project:
+- Prefer postings with valid `posted_date`.
+- Use date window filtering (typically last 14 days, with future-date allowance where needed).
+- If date is missing for a source, scrapers follow fallback logic:
+- try secondary career URL (`careers_url_1`) where supported,
+- otherwise scrape fallback pages (often first 20 pages) per company strategy.
+
+All scrapers upsert by deterministic external IDs to prevent duplicate jobs.
+
+## Status View in UI
+
+Top bar has:
+- `Jobs`
+- `Status`
+
+`Status` shows per company:
+- Company Name
+- Last Scraped
+- Status
+- Duration
+
+Data source is `scraper_runs`.
+
+## Useful Operational Commands
+
+Test Supabase connectivity:
+
+```bash
+npx tsx scripts/test-supabase.ts
+```
+
+Run tests:
+
+```bash
 npm test
-
-# Run tests in watch mode
 npm run test:watch
-
-# Run tests with coverage report
 npm run test:coverage
 ```
 
-**Test Coverage:**
-- ✅ Component tests for all major UI components
-- ✅ Utility tests for job data functions
-- ✅ Integration tests for search, filter, and pagination
-- 📊 Coverage threshold: 70% (branches, functions, lines, statements)
+Lint:
 
-## 🎨 Key Technologies
+```bash
+npm run lint
+```
 
-### Core Framework
-- **Next.js 16.1.6**: React framework with App Router
-- **React 19.2.3**: Latest React with improved performance
-- **TypeScript 5.7.3**: Type-safe development
+## End-to-End Data Flow
 
-### UI & Styling
-- **TailwindCSS 3.4.17**: Utility-first CSS framework
-- **Radix UI**: Accessible component primitives
-- **Lucide React**: Beautiful icon library
-- **next-themes**: Theme management
+```mermaid
+sequenceDiagram
+  participant R as Runner (scrape-all-jobs.ts)
+  participant S as Company Scraper
+  participant U as scraper-utils
+  participant DB as Supabase
+  participant UI as Next.js Dashboard
 
-### Components & Libraries
-- **React Hook Form**: Form state management
-- **Zod**: Schema validation
-- **Recharts**: Data visualization
-- **date-fns**: Date utilities
-- **Sonner**: Toast notifications
-- **cmdk**: Command menu component
+  R->>S: Execute scraper script
+  S->>U: Normalize/filter records
+  U->>DB: Upsert into jobs
+  R->>DB: Upsert company run status into scraper_runs
+  UI->>DB: Read jobs + companies + scraper_runs
+  DB-->>UI: Render Jobs and Status tabs
+```
 
-## 📊 Data Structure
+## Troubleshooting
 
-The application includes **30 sample job listings** from 10 top tech companies:
-- Vercel
-- Stripe
-- Figma
-- Notion
-- Linear
-- Supabase
-- Shopify
-- Datadog
-- Cloudflare
-- Plaid
+- `Missing Supabase environment variables`:
+- Ensure `.env.local` exists with both required keys.
 
-Each job listing includes:
-- Job title and description
-- Company information with brand colors
-- Location and location type
-- Department and employment type
-- Posted date
-- Salary range
-- Required and preferred qualifications
-- Security clearance requirements
-- H1B sponsorship information
+- Scraper completes but no jobs inserted:
+- Check `companies` table URL fields (`careers_url`, `careers_url_1`, etc.)
+- Confirm filters/date window are not excluding all jobs.
 
-## 🎯 Features in Detail
+- Status tab shows `Not Run`:
+- Run master runner (`npx tsx scripts/scrape-all-jobs.ts`) at least once.
+- Confirm `scraper_runs` table and unique index were created.
 
-### Search Functionality
-- Debounced search input (300ms delay)
-- Searches across: title, company, description, and department
-- Real-time results update
+- Company status not updating on rerun:
+- Verify unique index exists on `scraper_runs(company_name)`.
 
-### Filter System
-- Multi-select filters for companies, departments, location types, and employment types
-- Date range filtering
-- Active filter count badge
-- Visual filter chips showing applied filters
-- Clear all filters functionality
+## Notes for Contributors
 
-### Responsive Design
-- Desktop: Sidebar navigation with filters
-- Mobile: Sheet-based filter drawer
-- Adaptive layouts for all screen sizes
-
-### Theme Support
-- Light and dark mode
-- System preference detection
-- Smooth theme transitions
-- Persistent theme selection
-
-## 🛠️ Customization
-
-### Adding New Jobs
-Edit `lib/job-data.ts` to add or modify job listings. The data structure is type-safe with TypeScript.
-
-### Styling
-- Global styles: `app/globals.css`
-- Theme configuration: `tailwind.config.ts`
-- CSS variables for colors and spacing
-
-### Components
-All components are modular and can be customized independently. UI components are based on Radix UI and can be found in `components/ui/`.
-
-## 📝 Scripts
-
-| Command | Description |
-|---------|-------------|
-| `pnpm dev` | Start development server with Turbopack |
-| `pnpm build` | Build for production |
-| `pnpm start` | Start production server |
-| `pnpm lint` | Run ESLint |
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is open source and available under the MIT License.
-
-## 🙏 Acknowledgments
-
-- Built with [Next.js](https://nextjs.org/)
-- UI components from [Radix UI](https://www.radix-ui.com/)
-- Icons from [Lucide](https://lucide.dev/)
-- Styled with [TailwindCSS](https://tailwindcss.com/)
+- Prefer using shared helpers in `scripts/scraper-utils.ts`.
+- Keep external IDs stable for dedupe safety.
+- Preserve fallback behavior around missing posting dates.
+- For new companies, add scraper + company record + include in `SCRAPERS` list in `scripts/scrape-all-jobs.ts`.
