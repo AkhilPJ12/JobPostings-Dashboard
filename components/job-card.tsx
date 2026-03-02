@@ -3,27 +3,9 @@
 import Link from "next/link"
 import { MapPin, Building2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { type Job } from "@/lib/job-data"
 import { cn } from "@/lib/utils"
-
-function StatusBadge({ label, value }: { label: string; value: "Yes" | "No" | "N/A" }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-      <span>{label}:</span>
-      <Badge
-        variant="outline"
-        className={cn(
-          "h-5 px-1.5 text-[11px] font-medium",
-          value === "Yes" && "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-400",
-          value === "No" && "border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-400",
-          value === "N/A" && "border-border bg-muted text-muted-foreground"
-        )}
-      >
-        {value}
-      </Badge>
-    </span>
-  )
-}
 
 export function JobCard({ job }: { job: Job }) {
   return (
@@ -34,7 +16,7 @@ export function JobCard({ job }: { job: Job }) {
         "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2"
       )}
     >
-      <div className="flex items-center gap-3">
+      <div className="relative z-10 flex items-center gap-3">
         {/* Company initial */}
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
@@ -72,17 +54,45 @@ export function JobCard({ job }: { job: Job }) {
           </div>
         </div>
 
-        {/* Right side: badges */}
+        {/* Right side: apply */}
         <div className="hidden shrink-0 items-center gap-3 sm:flex">
-          <StatusBadge label="Clearance" value={job.securityClearance} />
-          <StatusBadge label="H1B" value={job.h1bSponsorship} />
+          {job.jobUrl ? (
+            <Button asChild size="sm" variant="outline" className="h-8">
+              <a
+                href={job.jobUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Apply
+              </a>
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" className="h-8" disabled>
+              Apply
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Mobile badges */}
-      <div className="mt-2 flex items-center gap-3 pl-12 sm:hidden">
-        <StatusBadge label="Clearance" value={job.securityClearance} />
-        <StatusBadge label="H1B" value={job.h1bSponsorship} />
+      {/* Mobile apply */}
+      <div className="relative z-10 mt-2 flex items-center gap-3 pl-12 sm:hidden">
+        {job.jobUrl ? (
+          <Button asChild size="sm" variant="outline" className="h-8">
+            <a
+              href={job.jobUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              Apply
+            </a>
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" className="h-8" disabled>
+            Apply
+          </Button>
+        )}
       </div>
 
       <Link

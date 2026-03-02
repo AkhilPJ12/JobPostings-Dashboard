@@ -15,6 +15,7 @@ const mockJob: Job = {
     description: 'Join our engineering team to build scalable, performant systems.',
     securityClearance: 'No',
     h1bSponsorship: 'Yes',
+    jobUrl: 'https://example.com/jobs/1',
     summary: 'We are seeking a talented engineer.',
     requiredQualifications: ['3+ years experience', 'TypeScript proficiency'],
     preferredQualifications: ['Next.js experience'],

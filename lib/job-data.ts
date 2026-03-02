@@ -14,6 +14,7 @@ export type Job = {
     description: string
     securityClearance: "Yes" | "No" | "N/A"
     h1bSponsorship: "Yes" | "No" | "N/A"
+    jobUrl: string
     summary: string
     requiredQualifications: string[]
     preferredQualifications: string[]
@@ -30,10 +31,22 @@ export type ScraperStatus = {
     errorMessage: string | null
 }
 
+const JOBS_CACHE_TTL_MS = 5 * 60 * 1000
+let jobsCache: { expiresAt: number; data: Job[] } | null = null
+let jobsInFlight: Promise<Job[]> | null = null
+
 /**
  * Fetch all active jobs from the database with company information
  */
 export async function getJobs(): Promise<Job[]> {
+    const nowTs = Date.now()
+    if (jobsCache && jobsCache.expiresAt > nowTs) {
+        return jobsCache.data
+    }
+    if (jobsInFlight) {
+        return jobsInFlight
+    }
+
     console.log('🔍 getJobs: Starting to fetch jobs from database...')
 
     // Supabase enforces a server-side max of 1000 rows per request.
@@ -42,57 +55,74 @@ export async function getJobs(): Promise<Job[]> {
     let allData: any[] = []
     let from = 0
     let hasMore = true
-
-    while (hasMore) {
-        const { data, error } = await supabase
-            .from('jobs')
-            .select(`
-          *,
-          company:companies(*)
+    jobsInFlight = (async () => {
+        while (hasMore) {
+            const { data, error } = await supabase
+                .from('jobs')
+                .select(`
+          id,
+          title,
+          location,
+          location_type,
+          department,
+          employment_type,
+          posted_date,
+          summary,
+          security_clearance,
+          h1b_sponsorship,
+          pay_range,
+          job_url,
+          company:companies(name,color)
         `)
-            .eq('is_active', true)
-            .order('posted_date', { ascending: false })
-            .range(from, from + PAGE_SIZE - 1)
+                .eq('is_active', true)
+                .order('posted_date', { ascending: false })
+                .range(from, from + PAGE_SIZE - 1)
 
-        if (error) {
-            console.error('❌ Error fetching jobs:', error)
-            throw error
+            if (error) {
+                console.error('❌ Error fetching jobs:', error)
+                throw error
+            }
+
+            if (data && data.length > 0) {
+                allData = allData.concat(data)
+                from += PAGE_SIZE
+                hasMore = data.length === PAGE_SIZE
+            } else {
+                hasMore = false
+            }
         }
 
-        if (data && data.length > 0) {
-            allData = allData.concat(data)
-            from += PAGE_SIZE
-            // If we got fewer than PAGE_SIZE, we've reached the end
-            hasMore = data.length === PAGE_SIZE
-        } else {
-            hasMore = false
-        }
+        const jobs = allData.map(job => ({
+            id: job.id.toString(),
+            title: job.title,
+            company: job.company.name,
+            companyColor: job.company.color || 'hsl(0, 0%, 20%)',
+            location: job.location || 'Not specified',
+            locationType: job.location_type || 'Onsite',
+            department: job.department || 'General',
+            type: job.employment_type || 'Full-time',
+            postedDate: job.posted_date ? new Date(job.posted_date) : new Date(),
+            // Dashboard does not need full description payload; summary is enough for list/search snippets.
+            description: job.summary || '',
+            securityClearance: job.security_clearance || 'N/A',
+            h1bSponsorship: job.h1b_sponsorship || 'N/A',
+            jobUrl: job.job_url || '',
+            summary: job.summary || '',
+            requiredQualifications: [],
+            preferredQualifications: [],
+            payRange: job.pay_range || 'Not specified',
+        }))
+
+        jobsCache = { data: jobs, expiresAt: Date.now() + JOBS_CACHE_TTL_MS }
+        console.log('✅ getJobs: Transformed jobs:', jobs.length, 'jobs')
+        return jobs
+    })()
+
+    try {
+        return await jobsInFlight
+    } finally {
+        jobsInFlight = null
     }
-
-    console.log('🔍 getJobs: Raw response total:', allData.length)
-
-    // Transform database format to frontend format
-    const jobs = allData.map(job => ({
-        id: job.id.toString(),
-        title: job.title,
-        company: job.company.name,
-        companyColor: job.company.color || 'hsl(0, 0%, 20%)',
-        location: job.location || 'Not specified',
-        locationType: job.location_type || 'Onsite',
-        department: job.department || 'General',
-        type: job.employment_type || 'Full-time',
-        postedDate: job.posted_date ? new Date(job.posted_date) : new Date(),
-        description: job.description || '',
-        securityClearance: job.security_clearance || 'N/A',
-        h1bSponsorship: job.h1b_sponsorship || 'N/A',
-        summary: job.summary || '',
-        requiredQualifications: job.required_qualifications || [],
-        preferredQualifications: job.preferred_qualifications || [],
-        payRange: job.pay_range || 'Not specified',
-    }))
-
-    console.log('✅ getJobs: Transformed jobs:', jobs.length, 'jobs')
-    return jobs
 }
 
 /**
@@ -129,6 +159,7 @@ export async function getJobById(id: string): Promise<Job | undefined> {
         description: data.description || '',
         securityClearance: data.security_clearance || 'N/A',
         h1bSponsorship: data.h1b_sponsorship || 'N/A',
+        jobUrl: data.job_url || '',
         summary: data.summary || '',
         requiredQualifications: data.required_qualifications || [],
         preferredQualifications: data.preferred_qualifications || [],

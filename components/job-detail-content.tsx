@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import {
   ArrowLeft,
   MapPin,
@@ -64,18 +65,27 @@ function SectionHeading({
 }
 
 export function JobDetailContent({ job }: { job: Job }) {
+  const router = useRouter()
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       {/* Top bar */}
       <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
         <div className="mx-auto flex h-14 max-w-3xl items-center gap-4 px-4">
-          <Link
-            href="/"
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== "undefined" && window.history.length > 1) {
+                router.back()
+              } else {
+                router.push("/")
+              }
+            }}
             className="flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to jobs
-          </Link>
+          </button>
           <div className="ml-auto">
             <ThemeToggle />
           </div>
@@ -141,7 +151,16 @@ export function JobDetailContent({ job }: { job: Job }) {
 
           {/* Action */}
           <div className="mt-5">
-            <Button className="w-full sm:w-auto">Apply for this position</Button>
+            <Button asChild className="w-full sm:w-auto" disabled={!job.jobUrl}>
+              <a
+                href={job.jobUrl || "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-disabled={!job.jobUrl}
+              >
+                Apply for this position
+              </a>
+            </Button>
           </div>
         </div>
 
@@ -225,8 +244,15 @@ export function JobDetailContent({ job }: { job: Job }) {
           <p className="mt-1.5 text-sm text-muted-foreground">
             Submit your application and our team will review it shortly.
           </p>
-          <Button className="mt-4" size="lg">
-            Apply for this position
+          <Button asChild className="mt-4" size="lg" disabled={!job.jobUrl}>
+            <a
+              href={job.jobUrl || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-disabled={!job.jobUrl}
+            >
+              Apply for this position
+            </a>
           </Button>
         </div>
       </main>

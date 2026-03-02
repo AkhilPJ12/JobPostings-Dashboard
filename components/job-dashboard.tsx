@@ -40,6 +40,8 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { ScraperStatusTable } from "@/components/scraper-status-table"
 
 const ITEMS_PER_PAGE = 12
+const DASHBOARD_CACHE_KEY = "job_dashboard_cache_v1"
+const DASHBOARD_CACHE_TTL_MS = 5 * 60 * 1000
 
 const defaultFilters: Filters = {
   companies: [],
@@ -68,10 +70,42 @@ export function JobDashboard() {
   // Fetch jobs from database on mount
   useEffect(() => {
     async function fetchJobs() {
+      let servedFromCache = false
       try {
         console.log('🔍 JobDashboard: Starting to fetch jobs...')
-        setIsLoading(true)
-        setIsStatusLoading(true)
+        if (typeof window !== "undefined") {
+          const raw = window.sessionStorage.getItem(DASHBOARD_CACHE_KEY)
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw) as {
+                fetchedAt: number
+                jobs: Job[]
+                companyCount: number
+                scraperStatuses: ScraperStatus[]
+              }
+              const isFresh = Date.now() - parsed.fetchedAt < DASHBOARD_CACHE_TTL_MS
+              if (isFresh) {
+                servedFromCache = true
+                const hydratedJobs = (parsed.jobs || []).map((job) => ({
+                  ...job,
+                  postedDate: new Date(job.postedDate),
+                }))
+                setJobs(hydratedJobs)
+                setCompanyCount(parsed.companyCount)
+                setScraperStatuses(parsed.scraperStatuses)
+                setIsLoading(false)
+                setIsStatusLoading(false)
+              }
+            } catch {
+              // Ignore cache parse errors and fetch fresh.
+            }
+          }
+        }
+
+        if (!servedFromCache) {
+          setIsLoading(true)
+          setIsStatusLoading(true)
+        }
         setError(null)
         setStatusError(null)
 
@@ -85,6 +119,22 @@ export function JobDashboard() {
         setJobs(fetchedJobs)
         setCompanyCount(count)
         setScraperStatuses(statuses)
+
+        if (typeof window !== "undefined") {
+          try {
+            window.sessionStorage.setItem(
+              DASHBOARD_CACHE_KEY,
+              JSON.stringify({
+                fetchedAt: Date.now(),
+                jobs: fetchedJobs,
+                companyCount: count,
+                scraperStatuses: statuses,
+              })
+            )
+          } catch {
+            // Ignore storage quota / serialization issues.
+          }
+        }
       } catch (error) {
         console.error('❌ JobDashboard: Error fetching jobs:', error)
         setError(error instanceof Error ? error.message : 'Failed to load jobs')

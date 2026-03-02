@@ -6,6 +6,11 @@ This project has two core parts:
 - Web app to browse/filter job postings.
 - Scraper pipeline that fetches jobs from company career sites/APIs and upserts into DB.
 
+## Documentation Index
+
+- [Scrapers Technical Guide](./scrapers.md)
+- [Project Change Logs](./logs.md)
+
 ## Architecture
 
 ```mermaid
