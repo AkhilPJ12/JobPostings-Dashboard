@@ -111,7 +111,10 @@ logs
 # package manager
 package-lock.json
 yarn.lock
-pnpm-lock.yaml
+# pnpm-lock.yaml must be committed for Vercel + GitHub Actions
+
+# Claude Code memory
+.claude/
 
 # test
 .jest-cache
