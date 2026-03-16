@@ -176,8 +176,9 @@ export function JobDashboard({
     if (filters.datePosted !== "all") {
       const cutoff = new Date()
       if (filters.datePosted === "7days") cutoff.setDate(cutoff.getDate() - 7)
-      else if (filters.datePosted === "30days") cutoff.setDate(cutoff.getDate() - 30)
-      const cutoffStr = cutoff.toISOString().split('T')[0]
+      else if (filters.datePosted === "14days") cutoff.setDate(cutoff.getDate() - 14)
+      // Use local date string to avoid UTC-vs-local mismatch for "today" filter
+      const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
       result = result.filter(job => (job.postedDate || '') >= cutoffStr)
     }
     if (filters.employmentTypes.length > 0) result = result.filter(job => filters.employmentTypes.includes(job.type))
@@ -216,7 +217,7 @@ export function JobDashboard({
       onRemove: () => handleFiltersChange({ ...filters, employmentTypes: filters.employmentTypes.filter(v => v !== t) }),
     }))
     if (filters.datePosted !== "all") {
-      const label = filters.datePosted === "today" ? "Today" : filters.datePosted === "7days" ? "Last 7 days" : "Last 30 days"
+      const label = filters.datePosted === "today" ? "Today" : filters.datePosted === "7days" ? "Last 7 days" : "Last 14 days"
       chips.push({
         label,
         className: chipColors.date,
@@ -352,7 +353,7 @@ export function JobDashboard({
                 <div className="relative max-w-2xl">
                   <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                   <input
-                    type="search"
+                    type="text"
                     placeholder="Search jobs, companies, skills..."
                     value={searchQuery}
                     onChange={e => setSearchQuery(e.target.value)}
