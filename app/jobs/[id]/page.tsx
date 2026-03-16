@@ -1,17 +1,14 @@
 import { cache } from "react"
 import { notFound } from "next/navigation"
-import { getJobs, getJobById } from "@/lib/job-data"
+import { getJobById } from "@/lib/job-data"
 import { JobDetailContent } from "@/components/job-detail-content"
 
+// Generate pages on-demand (ISR) — no pre-building 7000+ pages at deploy time.
+// Each page is built on first visit and cached for 5 minutes.
 export const revalidate = 300
+export const dynamicParams = true
 
-const getJobsCached = cache(getJobs)
 const getJobByIdCached = cache(getJobById)
-
-export async function generateStaticParams() {
-  const jobs = await getJobsCached()
-  return jobs.map((job) => ({ id: job.id }))
-}
 
 export async function generateMetadata({
   params,
