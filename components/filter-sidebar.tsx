@@ -1,13 +1,7 @@
 "use client"
 
-import { useState, useMemo, useEffect } from "react"
-import { Search, X } from "lucide-react"
-import { Checkbox } from "@/components/ui/checkbox"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Label } from "@/components/ui/label"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { useState, useEffect } from "react"
+import { Search, X, SlidersHorizontal, RotateCcw } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import {
   getUniqueCompanies,
@@ -27,22 +21,55 @@ type FilterSidebarProps = {
   filters: Filters
   onFiltersChange: (filters: Filters) => void
   activeFilterCount: number
+  isOpen: boolean
+  onClose: () => void
 }
 
-const DEFAULT_COMPANY_COUNT = 5
+const workTypeConfig: Record<string, { dot: string; text: string; selectedBorder: string; selectedBg: string }> = {
+  Remote: {
+    dot: "bg-emerald-500",
+    text: "text-emerald-600 dark:text-emerald-400",
+    selectedBorder: "border-emerald-500",
+    selectedBg: "bg-emerald-50 dark:bg-emerald-950/40",
+  },
+  Hybrid: {
+    dot: "bg-sky-500",
+    text: "text-sky-600 dark:text-sky-400",
+    selectedBorder: "border-sky-500",
+    selectedBg: "bg-sky-50 dark:bg-sky-950/40",
+  },
+  Onsite: {
+    dot: "bg-amber-500",
+    text: "text-amber-600 dark:text-amber-400",
+    selectedBorder: "border-amber-500",
+    selectedBg: "bg-amber-50 dark:bg-amber-950/40",
+  },
+}
 
 export function FilterSidebar({
   filters,
   onFiltersChange,
   activeFilterCount,
+  isOpen,
+  onClose,
 }: FilterSidebarProps) {
+  const [localFilters, setLocalFilters] = useState<Filters>(filters)
   const [companySearch, setCompanySearch] = useState("")
-  const [showAllCompanies, setShowAllCompanies] = useState(false)
+  const [visible, setVisible] = useState(false)
   const [companies, setCompanies] = useState<string[]>([])
   const [departments, setDepartments] = useState<string[]>([])
   const [companyCounts, setCompanyCounts] = useState<Record<string, number>>({})
 
-  // Fetch companies and departments on mount
+  useEffect(() => {
+    if (isOpen) {
+      setVisible(true)
+      setLocalFilters(filters)
+    } else {
+      const timer = setTimeout(() => setVisible(false), 300)
+      return () => clearTimeout(timer)
+    }
+  }, [isOpen, filters])
+
   useEffect(() => {
     async function fetchFilterData() {
       try {
@@ -52,8 +79,6 @@ export function FilterSidebar({
         ])
         setCompanies(fetchedCompanies)
         setDepartments(fetchedDepartments)
-
-        // Fetch job counts for each company
         const counts: Record<string, number> = {}
         for (const company of fetchedCompanies) {
           counts[company] = await getJobCountByCompany(company)
@@ -66,253 +91,307 @@ export function FilterSidebar({
     fetchFilterData()
   }, [])
 
-  const filteredCompanies = useMemo(
-    () =>
-      companySearch
-        ? companies.filter((c) =>
-          c.toLowerCase().includes(companySearch.toLowerCase())
-        )
-        : companies,
-    [companies, companySearch]
-  )
+  if (!visible && !isOpen) return null
 
-  const visibleCompanies = useMemo(() => {
-    if (companySearch || showAllCompanies) return filteredCompanies
-    return filteredCompanies.slice(0, DEFAULT_COMPANY_COUNT)
-  }, [filteredCompanies, showAllCompanies, companySearch])
+  const filteredCompanies = companySearch
+    ? companies.filter(c => c.toLowerCase().includes(companySearch.toLowerCase()))
+    : companies
 
-  const hasMoreCompanies = !companySearch && filteredCompanies.length > DEFAULT_COMPANY_COUNT
-
-  const toggleArrayFilter = (
-    key: "companies" | "locationTypes" | "departments" | "employmentTypes",
-    value: string
-  ) => {
-    const current = filters[key]
-    const updated = current.includes(value)
-      ? current.filter((v) => v !== value)
-      : [...current, value]
-    onFiltersChange({ ...filters, [key]: updated })
+  const toggleCompany = (company: string) => {
+    const updated = localFilters.companies.includes(company)
+      ? localFilters.companies.filter(c => c !== company)
+      : [...localFilters.companies, company]
+    setLocalFilters({ ...localFilters, companies: updated })
   }
 
-  const selectAllCompanies = () => {
-    const allSelected = companies.every((c) => filters.companies.includes(c))
-    onFiltersChange({
-      ...filters,
-      companies: allSelected ? [] : [...companies],
-    })
+  const toggleLocationType = (type: string) => {
+    const updated = localFilters.locationTypes.includes(type)
+      ? localFilters.locationTypes.filter(t => t !== type)
+      : [...localFilters.locationTypes, type]
+    setLocalFilters({ ...localFilters, locationTypes: updated })
   }
 
-  const clearAll = () => {
-    onFiltersChange({
+  const toggleDepartment = (dept: string) => {
+    const updated = localFilters.departments.includes(dept)
+      ? localFilters.departments.filter(d => d !== dept)
+      : [...localFilters.departments, dept]
+    setLocalFilters({ ...localFilters, departments: updated })
+  }
+
+  const toggleEmploymentType = (type: string) => {
+    const updated = localFilters.employmentTypes.includes(type)
+      ? localFilters.employmentTypes.filter(t => t !== type)
+      : [...localFilters.employmentTypes, type]
+    setLocalFilters({ ...localFilters, employmentTypes: updated })
+  }
+
+  const handleApply = () => {
+    onFiltersChange(localFilters)
+    onClose()
+  }
+
+  const handleReset = () => {
+    const reset: Filters = {
       companies: [],
       locationTypes: [],
       departments: [],
       datePosted: "all",
       employmentTypes: [],
-    })
+    }
+    setLocalFilters(reset)
+    onFiltersChange(reset)
   }
 
-  return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-border px-5 py-4">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-foreground">Filters</h2>
-          {activeFilterCount > 0 && (
-            <Badge className="h-5 min-w-5 justify-center rounded-full bg-primary px-1.5 text-xs text-primary-foreground">
-              {activeFilterCount}
-            </Badge>
-          )}
-        </div>
-        {activeFilterCount > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clearAll}
-            className="h-auto px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            Clear all
-          </Button>
-        )}
-      </div>
+  const localActiveCount =
+    localFilters.companies.length +
+    localFilters.locationTypes.length +
+    localFilters.departments.length +
+    localFilters.employmentTypes.length +
+    (localFilters.datePosted !== "all" ? 1 : 0)
 
-      <ScrollArea className="flex-1">
-        <div className="space-y-6 p-5">
-          {/* Companies */}
-          <section>
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Company
-            </h3>
-            <div className="relative mb-3">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm z-40 cursor-pointer"
+        style={{ opacity: isOpen ? 1 : 0, transition: "opacity 0.3s ease" }}
+        onClick={onClose}
+      />
+
+      {/* Panel */}
+      <div
+        className="fixed inset-y-0 right-0 w-full sm:w-[420px] bg-card border-l border-border z-50 flex flex-col shadow-2xl"
+        style={{
+          transform: isOpen ? "translateX(0)" : "translateX(100%)",
+          transition: "transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-border/60">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
+              <SlidersHorizontal className="w-4 h-4 text-primary" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-foreground">Filters</h3>
+              {localActiveCount > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {localActiveCount} active filter{localActiveCount !== 1 ? "s" : ""}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {localActiveCount > 0 && (
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition-colors text-xs"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-muted rounded-xl transition-colors text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-7">
+          {/* Company */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-foreground">Company</label>
+              <button
+                onClick={() => {
+                  const allSelected = companies.every(c => localFilters.companies.includes(c))
+                  setLocalFilters({ ...localFilters, companies: allSelected ? [] : [...companies] })
+                }}
+                className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+              >
+                {companies.every(c => localFilters.companies.includes(c)) ? "Deselect all" : "Select all"}
+              </button>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
                 placeholder="Search companies..."
                 value={companySearch}
-                onChange={(e) => setCompanySearch(e.target.value)}
-                className="h-8 bg-muted/50 pl-8 text-xs"
+                onChange={e => setCompanySearch(e.target.value)}
+                className="pl-9 bg-muted/60 border-border/50 rounded-xl h-10"
               />
               {companySearch && (
                 <button
                   onClick={() => setCompanySearch("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear company search"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
-            <button
-              onClick={selectAllCompanies}
-              className="mb-2 text-xs font-medium text-primary hover:underline"
-            >
-              {companies.every((c) => filters.companies.includes(c))
-                ? "Deselect All"
-                : "Select All"}
-            </button>
-            <div className="max-h-[200px] space-y-1.5 overflow-y-auto">
-              {visibleCompanies.map((company) => (
+            <div className="max-h-48 overflow-y-auto space-y-0.5">
+              {filteredCompanies.map(company => (
                 <label
                   key={company}
-                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/50"
+                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-xl transition-colors group"
                 >
-                  <Checkbox
-                    checked={filters.companies.includes(company)}
-                    onCheckedChange={() =>
-                      toggleArrayFilter("companies", company)
-                    }
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="flex-1 truncate text-foreground">{company}</span>
-                  <span className="text-xs tabular-nums text-muted-foreground">
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all flex-shrink-0 ${
+                    localFilters.companies.includes(company)
+                      ? "bg-primary border-primary"
+                      : "border-border/60 group-hover:border-primary/40"
+                  }`}>
+                    {localFilters.companies.includes(company) && (
+                      <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                  <input type="checkbox" checked={localFilters.companies.includes(company)} onChange={() => toggleCompany(company)} className="hidden" />
+                  <span className="flex-1 text-sm text-foreground/80">{company}</span>
+                  <span className="text-xs font-semibold text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
                     {companyCounts[company] || 0}
                   </span>
                 </label>
               ))}
             </div>
-            {hasMoreCompanies && (
-              <button
-                onClick={() => setShowAllCompanies(!showAllCompanies)}
-                className="mt-2 text-xs font-medium text-primary hover:underline"
-              >
-                {showAllCompanies
-                  ? "Show less"
-                  : `Show all (${filteredCompanies.length})`}
-              </button>
-            )}
-          </section>
+          </div>
 
-          {/* Location Type */}
-          <section>
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Location Type
-            </h3>
-            <div className="space-y-1.5">
-              {["Remote", "Hybrid", "Onsite"].map((type) => (
-                <label
-                  key={type}
-                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/50"
-                >
-                  <Checkbox
-                    checked={filters.locationTypes.includes(type)}
-                    onCheckedChange={() =>
-                      toggleArrayFilter("locationTypes", type)
-                    }
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="text-foreground">{type}</span>
-                </label>
-              ))}
+          {/* Work Type */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground">Work Type</label>
+            <div className="grid grid-cols-3 gap-2">
+              {(["Remote", "Hybrid", "Onsite"] as const).map(type => {
+                const config = workTypeConfig[type]
+                const isSelected = localFilters.locationTypes.includes(type)
+                return (
+                  <button
+                    key={type}
+                    onClick={() => toggleLocationType(type)}
+                    className={`flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all duration-200 ${
+                      isSelected
+                        ? `${config.selectedBorder} ${config.selectedBg}`
+                        : "border-border/50 hover:border-primary/30 hover:bg-muted/40"
+                    }`}
+                  >
+                    <span className={`w-2.5 h-2.5 rounded-full ${config.dot}`} />
+                    <span className={`text-[13px] font-medium ${isSelected ? config.text : "text-foreground"}`}>{type}</span>
+                  </button>
+                )
+              })}
             </div>
-          </section>
+          </div>
 
           {/* Department */}
-          <section>
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Department
-            </h3>
-            <div className="space-y-1.5">
-              {departments.map((dept) => (
-                <label
-                  key={dept}
-                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/50"
-                >
-                  <Checkbox
-                    checked={filters.departments.includes(dept)}
-                    onCheckedChange={() =>
-                      toggleArrayFilter("departments", dept)
-                    }
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="text-foreground">{dept}</span>
-                </label>
-              ))}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground">Department</label>
+            <div className="flex flex-wrap gap-2">
+              {departments.map(dept => {
+                const isSelected = localFilters.departments.includes(dept)
+                return (
+                  <button
+                    key={dept}
+                    onClick={() => toggleDepartment(dept)}
+                    className={`px-3 py-1.5 rounded-full border text-[13px] transition-all duration-200 ${
+                      isSelected
+                        ? "bg-primary text-primary-foreground border-primary shadow-sm font-semibold"
+                        : "bg-muted/50 text-muted-foreground border-border/50 hover:border-primary/30 hover:text-foreground"
+                    }`}
+                  >
+                    {dept}
+                  </button>
+                )
+              })}
             </div>
-          </section>
+          </div>
 
           {/* Date Posted */}
-          <section>
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Date Posted
-            </h3>
-            <RadioGroup
-              value={filters.datePosted}
-              onValueChange={(value) =>
-                onFiltersChange({ ...filters, datePosted: value })
-              }
-              className="space-y-1.5"
-            >
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground">Date Posted</label>
+            <div className="space-y-1.5">
               {[
                 { value: "today", label: "Today" },
                 { value: "7days", label: "Last 7 days" },
                 { value: "30days", label: "Last 30 days" },
                 { value: "all", label: "All time" },
-              ].map((option) => (
+              ].map(option => (
                 <label
                   key={option.value}
-                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/50"
+                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-xl transition-colors group"
                 >
-                  <RadioGroupItem
-                    value={option.value}
-                    id={`date-${option.value}`}
-                    className="h-3.5 w-3.5"
+                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
+                    localFilters.datePosted === option.value ? "border-primary" : "border-border/60 group-hover:border-primary/40"
+                  }`}>
+                    {localFilters.datePosted === option.value && (
+                      <div className="w-2.5 h-2.5 rounded-full bg-primary" />
+                    )}
+                  </div>
+                  <input
+                    type="radio"
+                    name="datePosted"
+                    checked={localFilters.datePosted === option.value}
+                    onChange={() => setLocalFilters({ ...localFilters, datePosted: option.value })}
+                    className="hidden"
                   />
-                  <Label
-                    htmlFor={`date-${option.value}`}
-                    className="cursor-pointer font-normal text-foreground"
-                  >
+                  <span className={`text-sm ${localFilters.datePosted === option.value ? "text-foreground font-medium" : "text-muted-foreground"}`}>
                     {option.label}
-                  </Label>
+                  </span>
                 </label>
               ))}
-            </RadioGroup>
-          </section>
+            </div>
+          </div>
 
           {/* Employment Type */}
-          <section>
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Employment Type
-            </h3>
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground">Employment Type</label>
             <div className="space-y-1.5">
-              {["Full-time", "Part-time", "Contract", "Internship"].map(
-                (type) => (
-                  <label
-                    key={type}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/50"
-                  >
-                    <Checkbox
-                      checked={filters.employmentTypes.includes(type)}
-                      onCheckedChange={() =>
-                        toggleArrayFilter("employmentTypes", type)
-                      }
-                      className="h-3.5 w-3.5"
-                    />
-                    <span className="text-foreground">{type}</span>
-                  </label>
-                )
-              )}
+              {["Full-time", "Part-time", "Contract", "Internship"].map(type => (
+                <label
+                  key={type}
+                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-xl transition-colors group"
+                >
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all flex-shrink-0 ${
+                    localFilters.employmentTypes.includes(type)
+                      ? "bg-primary border-primary"
+                      : "border-border/60 group-hover:border-primary/40"
+                  }`}>
+                    {localFilters.employmentTypes.includes(type) && (
+                      <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                  <input type="checkbox" checked={localFilters.employmentTypes.includes(type)} onChange={() => toggleEmploymentType(type)} className="hidden" />
+                  <span className={`text-sm ${localFilters.employmentTypes.includes(type) ? "text-foreground font-medium" : "text-muted-foreground"}`}>
+                    {type}
+                  </span>
+                </label>
+              ))}
             </div>
-          </section>
+          </div>
         </div>
-      </ScrollArea>
-    </div>
+
+        {/* Footer */}
+        <div className="p-6 border-t border-border/60 bg-card">
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              className="flex-1 px-4 py-3 border border-border/60 rounded-xl hover:bg-muted transition-colors text-foreground text-sm font-medium"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleApply}
+              className="flex-1 px-4 py-3 bg-gradient-to-r from-indigo-500 to-violet-500 text-white rounded-xl hover:from-indigo-600 hover:to-violet-600 transition-all duration-200 shadow-lg shadow-indigo-500/20 text-sm font-medium"
+            >
+              Apply{localActiveCount > 0 ? ` (${localActiveCount})` : ""}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   )
 }

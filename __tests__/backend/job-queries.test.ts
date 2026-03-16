@@ -26,7 +26,7 @@ describe('Job Queries', () => {
             expect(job).toHaveProperty('postedDate')
             expect(job).toHaveProperty('description')
             expect(job).toHaveProperty('securityClearance')
-            expect(job).toHaveProperty('h1bSponsorship')
+            expect(job).toHaveProperty('visaSponsorship')
             expect(job).toHaveProperty('summary')
             expect(job).toHaveProperty('requiredQualifications')
             expect(job).toHaveProperty('preferredQualifications')
@@ -40,7 +40,7 @@ describe('Job Queries', () => {
                 expect(typeof job.company).toBe('string')
                 expect(typeof job.location).toBe('string')
                 expect(typeof job.department).toBe('string')
-                expect(job.postedDate).toBeInstanceOf(Date)
+                expect(typeof job.postedDate === 'string' || job.postedDate === null).toBe(true)
                 expect(Array.isArray(job.requiredQualifications)).toBe(true)
                 expect(Array.isArray(job.preferredQualifications)).toBe(true)
             }
@@ -67,18 +67,18 @@ describe('Job Queries', () => {
             }
         })
 
-        it('should return jobs with valid enum values for h1bSponsorship', () => {
+        it('should return jobs with valid enum values for visaSponsorship', () => {
             const validValues = ['Yes', 'No', 'N/A']
             for (const job of jobs) {
-                expect(validValues).toContain(job.h1bSponsorship)
+                expect(validValues).toContain(job.visaSponsorship)
             }
         })
 
         it('should return jobs sorted by posted date descending', () => {
             for (let i = 1; i < jobs.length; i++) {
-                expect(jobs[i - 1].postedDate.getTime()).toBeGreaterThanOrEqual(
-                    jobs[i].postedDate.getTime()
-                )
+                const prev = jobs[i - 1].postedDate || ''
+                const curr = jobs[i].postedDate || ''
+                expect(prev >= curr).toBe(true)
             }
         })
 
@@ -123,7 +123,7 @@ describe('Job Queries', () => {
             expect(fetched).toBeDefined()
             expect(typeof fetched!.title).toBe('string')
             expect(typeof fetched!.company).toBe('string')
-            expect(fetched!.postedDate).toBeInstanceOf(Date)
+            expect(typeof fetched!.postedDate === 'string' || fetched!.postedDate === null).toBe(true)
             expect(Array.isArray(fetched!.requiredQualifications)).toBe(true)
         })
     })

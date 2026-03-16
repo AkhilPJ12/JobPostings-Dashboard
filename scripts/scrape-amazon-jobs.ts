@@ -16,6 +16,7 @@
 import { createClient } from '@supabase/supabase-js'
 import * as dotenv from 'dotenv'
 import { resolve } from 'path'
+import { withScraperRun, normalizeDepartment } from './scraper-utils'
 
 // Load environment variables
 dotenv.config({ path: resolve(process.cwd(), '.env.local') })
@@ -412,7 +413,7 @@ function processJobForDb(job: AmazonJob, companyId: number): DbJob {
         title: job.title.trim(),
         location: job.normalized_location || job.location || 'Not specified',
         location_type: determineLocationType(job),
-        department: job.job_category || 'General',
+        department: normalizeDepartment(job.job_category || 'General', job.title.trim()),
         employment_type: 'Full-time',
         posted_date: postedDate || new Date().toISOString().split('T')[0],
         description: cleanHtml(job.description),
@@ -593,7 +594,7 @@ async function scrapeAmazonJobs() {
 
 // ─── Run ─────────────────────────────────────────────────────────────────────
 
-scrapeAmazonJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeAmazonJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

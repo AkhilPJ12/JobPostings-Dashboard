@@ -12,6 +12,8 @@ import {
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
     sleep, randomDelay,
+    withScraperRun, htmlToText, parseDescriptionQualifications,
+    normalizeDepartment,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -130,14 +132,17 @@ async function scrapeJPMorganJobs() {
             const country = (j.PrimaryLocationCountry || '').toUpperCase()
             if (country && country !== 'US') continue
 
-            const description = cleanHtml([
-                j.ShortDescriptionStr || '',
-                j.ExternalResponsibilitiesStr || '',
-                j.ExternalQualificationsStr || '',
-            ].join('\n\n'))
+            const summary = htmlToText(j.ShortDescriptionStr || '')
+            const responsibilities = htmlToText(j.ExternalResponsibilitiesStr || '')
+            const qualificationsText = htmlToText(j.ExternalQualificationsStr || '')
+
+            const quals = parseDescriptionQualifications(qualificationsText)
+
+            // Description = responsibilities (main content)
+            const description = responsibilities || summary
 
             const dept = j.Department || j.JobFamily || 'General'
-            const fullText = `${title}\n${description}`
+            const fullText = `${title}\n${summary}\n${responsibilities}\n${qualificationsText}`
 
             const job: DbJob = {
                 company_id: company.id,
@@ -145,13 +150,13 @@ async function scrapeJPMorganJobs() {
                 title,
                 location,
                 location_type: determineLocationType(location, description),
-                department: dept,
+                department: normalizeDepartment(dept, title),
                 employment_type: determineEmploymentType(j.WorkerType || j.JobType || j.ContractType || title),
                 posted_date: postedDate,
                 description,
-                summary: createSummary(description),
-                required_qualifications: [],
-                preferred_qualifications: [],
+                summary: summary || createSummary(responsibilities),
+                required_qualifications: quals.required,
+                preferred_qualifications: quals.preferred,
                 pay_range: extractPayRange(description),
                 security_clearance: detectSecurityClearance(fullText),
                 h1b_sponsorship: detectH1BSponsorship(fullText),
@@ -198,7 +203,7 @@ async function scrapeJPMorganJobs() {
     logSummary(CONFIG.companyName, totalCollected, totalUpserted, dbCount, careerUrl)
 }
 
-scrapeJPMorganJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeJPMorganJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

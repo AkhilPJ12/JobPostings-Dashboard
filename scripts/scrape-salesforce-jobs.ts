@@ -12,8 +12,8 @@ import {
     DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary, supabase,
     isWithinDaysOrFuture, parsePostedDate, cleanHtml, extractPayRange,
     detectSecurityClearance, detectH1BSponsorship,
-    determineLocationType, determineEmploymentType,
-    sleep, randomDelay,
+    determineLocationType, determineEmploymentType, normalizeDepartment,
+    sleep, randomDelay, withScraperRun, parseDescriptionQualifications,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -166,6 +166,7 @@ async function scrapeSalesforceJobs() {
 
         const finalPostedDate = postedDate || new Date().toISOString().split('T')[0]
         const finalLocation = normalizeLocation(j.location)
+        const quals = parseDescriptionQualifications(detailDescription)
 
         const job: DbJob = {
             company_id: company.id,
@@ -173,13 +174,13 @@ async function scrapeSalesforceJobs() {
             title: j.title.slice(0, 240),
             location: finalLocation,
             location_type: determineLocationType(finalLocation, detailDescription),
-            department: (j.department || 'General').slice(0, 240),
+            department: normalizeDepartment((j.department || 'General').slice(0, 240), j.title),
             employment_type: determineEmploymentType(j.title),
             posted_date: finalPostedDate,
             description: detailDescription,
             summary: `${j.title.slice(0, 180)} at Salesforce - ${finalLocation}`.slice(0, 240),
-            required_qualifications: [],
-            preferred_qualifications: [],
+            required_qualifications: quals.required,
+            preferred_qualifications: quals.preferred,
             pay_range: extractPayRange(detailDescription),
             security_clearance: detectSecurityClearance(detailDescription),
             h1b_sponsorship: detectH1BSponsorship(detailDescription),
@@ -232,7 +233,7 @@ async function scrapeSalesforceJobs() {
     logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, sourceUrl)
 }
 
-scrapeSalesforceJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeSalesforceJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

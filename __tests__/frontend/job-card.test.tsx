@@ -7,14 +7,17 @@ const mockJob: Job = {
     title: 'Senior Frontend Engineer',
     company: 'Vercel',
     companyColor: 'hsl(0, 0%, 10%)',
-    location: 'Remote',
-    locationType: 'Remote',
+    companyIcon: null,
+    location: 'San Francisco, CA',
+    locationType: 'Onsite',
     department: 'Engineering',
     type: 'Full-time',
-    postedDate: new Date(),
+    postedDate: new Date().toISOString().split('T')[0],
+    endDate: null,
     description: 'Join our engineering team to build scalable, performant systems.',
     securityClearance: 'No',
-    h1bSponsorship: 'Yes',
+    visaSponsorship: 'Yes',
+    externalJobId: 'mock_1',
     jobUrl: 'https://example.com/jobs/1',
     summary: 'We are seeking a talented engineer.',
     requiredQualifications: ['3+ years experience', 'TypeScript proficiency'],
@@ -33,7 +36,7 @@ describe('JobCard', () => {
 
     it('should link to job detail page', () => {
         render(<JobCard job={mockJob} />)
-        const link = screen.getByRole('link')
+        const link = screen.getByLabelText(/View details for/i)
         expect(link).toHaveAttribute('href', `/jobs/${mockJob.id}`)
     })
 })

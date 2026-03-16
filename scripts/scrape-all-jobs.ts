@@ -11,7 +11,7 @@
 
 import { spawn } from 'child_process'
 import * as path from 'path'
-import { supabase } from './scraper-utils'
+import { supabase, cleanupOldJobs } from './scraper-utils'
 
 const SCRAPERS = [
     { name: 'Amazon', script: 'scrape-amazon-jobs.ts' },
@@ -96,9 +96,15 @@ async function persistRun(args: {
     durationSeconds: number
     errorMessage: string | null
 }) {
+    // Delete existing row for this company, then insert new one
+    await supabase
+        .from('scraper_runs')
+        .delete()
+        .eq('company_name', args.companyName)
+
     const { error } = await supabase
         .from('scraper_runs')
-        .upsert({
+        .insert({
             company_name: args.companyName,
             run_group_id: args.runGroupId,
             status: args.status,
@@ -106,7 +112,7 @@ async function persistRun(args: {
             completed_at: args.completedAt,
             duration_seconds: args.durationSeconds,
             error_message: args.errorMessage,
-        }, { onConflict: 'company_name' })
+        })
 
     if (error) {
         console.warn(`⚠️ Could not persist run status for ${args.companyName}: ${error.message}`)
@@ -175,6 +181,9 @@ async function main() {
     console.log(`📋 Running ${scrapersToRun.length} scraper(s): ${scrapersToRun.map(s => s.name).join(', ')}`)
     console.log(`🧾 Run Group ID: ${runGroupId}`)
     console.log(`📅 Started: ${new Date().toLocaleString()}\n`)
+
+    // Cleanup jobs older than 14 days before starting
+    await cleanupOldJobs(14)
 
     const results: ScraperResult[] = []
 

@@ -456,13 +456,32 @@ In no-date fallback mode, `posted_date` defaults to today.
 
 ## 4. Date Rules Summary (Quick View)
 
-- Strict recent window (14 days): all scrapers.
-- Function used in most scripts: `isWithinDaysOrFuture` (future-dated postings are allowed).
-- Amazon uses strict `isWithinDays` in current script.
-- For “no-date available” fallback mode (Google/Meta/Microsoft/Nvidia/Deloitte):
-  - scrape limited first 20 pages,
-  - if needed, save with `posted_date = today`.
-- Salesforce currently skips jobs with unresolved dates after list+detail attempts.
+### How Each Scraper Gets Jobs & Handles Posted Dates
+
+| Company | Source Type | Has Posted Date? | Date Field | If Date Missing | Date Range | Max Jobs |
+|---------|-----------|-----------------|------------|----------------|------------|----------|
+| Amazon | REST API (`amazon.jobs/search.json`) | Yes | `posted_date` | Falls back to today | Last 14 days | 100/page, 300 pages |
+| Microsoft | REST API (`/api/pcsx/search`) + detail enrichment | Yes | `postedTs` / `creationTs` (Unix timestamp) | Falls back to today | Last 14 days | 10/page, 100 pages |
+| Nvidia | Workday CXS API (primary) / Eightfold API (fallback) | Yes | `postedOn` (relative text: “posted X days ago”) | Detail fetch → today | Last 14 days | 20/page, 120 pages |
+| Google | Browser DOM scraping (Playwright) | Sometimes | Date element search in DOM | Falls back to today, limits to 20 pages | Last 14 days | 20/page, 150 pages |
+| Meta | GraphQL API (intercepted via Playwright) | No | None — API returns no date field | Always uses today | N/A (20 pages max) | 20/page, 20 pages |
+| Apple | Browser DOM scraping (Playwright) | Yes | `span.job-posted-date` | Falls back to today | Last 14 days | Click pagination, 100 pages |
+| IBM | REST API (`www-api.ibm.com/search/api/v2`) | Yes | `hit.sort[0]` (dcdate Unix timestamp) | **Job is skipped** | Last 14 days | 30/page, 40 pages |
+| Salesforce | Browser DOM + detail page fetch (Playwright) | Sometimes | `time` element or “Posted ...” text on detail page | **Job is skipped** | Last 14 days | 20/page, 30 pages |
+| Accenture | REST API (`/api/accenture/elastic/findjobs`) | Yes | `postedDateText` (relative: “posted X days ago”) | `updateDate` → today | Last 14 days | 20/page, 80 pages |
+| Visa | REST API (`search.visa.com/CAREERS/careers/jobs`) | Yes | `createdOn` (ISO date) | **Job is skipped** | Last 14 days | 100/page, 30 pages |
+| JPMorgan | REST API (Oracle HCM `recruitingCEJobRequisitions`) | Yes | `PostedDate` | **Job is skipped** | Last 14 days (API-filtered) | 25/page, 120 pages |
+| Deloitte | Browser DOM + JSON-LD from detail pages (Playwright) | Sometimes | `JobPosting.datePosted` (JSON-LD) | Falls back to today, limits to 20 pages | Last 14 days | 10/page, 80 pages |
+
+### Key Patterns
+
+- **All scrapers target a 14-day window** — only jobs posted in the last 14 days are collected.
+- **3 scrapers skip jobs without dates**: IBM, Visa, JPMorgan — these have reliable date fields, so missing date = bad data.
+- **5 scrapers fall back to today's date**: Amazon, Microsoft, Nvidia, Apple, Accenture — date is usually present but defaults to today if parsing fails.
+- **3 scrapers have a “no-date mode”**: Google, Meta, Deloitte — if no dates are detected, they limit scraping to 20 pages and use today's date for all jobs.
+- **1 scraper is broken**: Meta — GraphQL API returns no data at all (site blocks scraping).
+- **Salesforce** skips jobs without dates after attempting both list page and detail page extraction.
+- **JPMorgan** is the only scraper that filters by date **server-side** (`selectedPostingDatesFacet=14`); all others filter client-side.
 
 ---
 

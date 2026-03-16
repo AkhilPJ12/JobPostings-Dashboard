@@ -2,38 +2,31 @@ import {
     getUniqueCompanies,
     getUniqueDepartments,
     getJobById,
-    formatRelativeDate,
+    formatDate,
 } from '@/lib/job-data'
 
 describe('job-data utilities', () => {
-    describe('formatRelativeDate', () => {
-        it('should return "Today" for current date', () => {
-            const today = new Date()
-            expect(formatRelativeDate(today)).toBe('Today')
+    describe('formatDate', () => {
+        it('should return "N/A" for null', () => {
+            expect(formatDate(null)).toBe('N/A')
         })
 
-        it('should return "Yesterday" for 1 day ago', () => {
-            const yesterday = new Date()
-            yesterday.setDate(yesterday.getDate() - 1)
-            expect(formatRelativeDate(yesterday)).toBe('Yesterday')
+        it('should return "N/A" for empty string', () => {
+            expect(formatDate('')).toBe('N/A')
         })
 
-        it('should return "X days ago" for 2-6 days ago', () => {
-            const threeDaysAgo = new Date()
-            threeDaysAgo.setDate(threeDaysAgo.getDate() - 3)
-            expect(formatRelativeDate(threeDaysAgo)).toBe('3 days ago')
+        it('should return "N/A" for invalid date', () => {
+            expect(formatDate('not-a-date')).toBe('N/A')
         })
 
-        it('should return weeks for 7-29 days ago', () => {
-            const twoWeeksAgo = new Date()
-            twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14)
-            expect(formatRelativeDate(twoWeeksAgo)).toBe('2 weeks ago')
+        it('should format a valid date string', () => {
+            const result = formatDate('2026-03-12')
+            expect(result).toBe('Mar 12, 2026')
         })
 
-        it('should return months for 30+ days ago', () => {
-            const twoMonthsAgo = new Date()
-            twoMonthsAgo.setDate(twoMonthsAgo.getDate() - 60)
-            expect(formatRelativeDate(twoMonthsAgo)).toBe('2 months ago')
+        it('should format another valid date', () => {
+            const result = formatDate('2026-01-05')
+            expect(result).toBe('Jan 5, 2026')
         })
     })
 })

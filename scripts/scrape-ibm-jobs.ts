@@ -8,10 +8,11 @@
 import {
     DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary,
     isWithinDaysOrFuture, parsePostedDate,
-    cleanHtml, createSummary, extractPayRange,
+    cleanHtml, createSummary, extractPayRange, normalizeDepartment,
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
     sleep, randomDelay,
+    withScraperRun, parseDescriptionQualifications, htmlToText,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -153,7 +154,9 @@ async function scrapeIBMJobs() {
             if (!title) continue
 
             const location = (src.field_keyword_19 || 'United States').trim()
-            const description = cleanHtml(src.description || '')
+            const rawDescription = src.description || ''
+            const quals = parseDescriptionQualifications(htmlToText(rawDescription))
+            const description = htmlToText(rawDescription)
             const fullText = `${title}\n${description}`
 
             const job: DbJob = {
@@ -162,13 +165,13 @@ async function scrapeIBMJobs() {
                 title,
                 location,
                 location_type: determineLocationType(location, description),
-                department: (src.field_keyword_08 || 'General').trim(),
+                department: normalizeDepartment((src.field_keyword_08 || 'General').trim(), title),
                 employment_type: determineEmploymentType(title),
                 posted_date: postedDate,
                 description,
                 summary: createSummary(description),
-                required_qualifications: [],
-                preferred_qualifications: [],
+                required_qualifications: quals.required,
+                preferred_qualifications: quals.preferred,
                 pay_range: extractPayRange(description),
                 security_clearance: detectSecurityClearance(fullText),
                 h1b_sponsorship: detectH1BSponsorship(fullText),
@@ -204,7 +207,7 @@ async function scrapeIBMJobs() {
     logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
 }
 
-scrapeIBMJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeIBMJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

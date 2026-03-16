@@ -1,17 +1,18 @@
 /**
  * PCSX Platform Scraper
  *
- * Microsoft: API-based scraping via /api/pcsx/search
+ * Microsoft: API-based scraping via /api/pcsx/search + /api/apply/v2/jobs for details
  * Nvidia: Workday CXS API (primary) with fallback to Eightfold /api/pcsx/search
  */
 import { chromium } from 'playwright'
 import {
     DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary,
     isUSLocation, isWithinDaysOrFuture, parsePostedDate,
-    cleanHtml, extractPayRange,
+    cleanHtml, extractPayRange, parseQualifications,
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
-    sleep, randomDelay,
+    sleep, randomDelay, withScraperRun, parseDescriptionQualifications,
+    normalizeDepartment,
 } from './scraper-utils'
 
 interface PCSXConfig {
@@ -107,6 +108,27 @@ type MicrosoftSearchResponse = {
     }
 }
 
+type MicrosoftDetailResponse = {
+    id?: number
+    name?: string
+    job_description?: string
+    ats_job_id?: string
+    display_job_id?: string
+    department?: string
+    location?: string
+    locations?: string[]
+    work_location_option?: string
+}
+
+type MicrosoftParsedSections = {
+    overview: string
+    responsibilities: string
+    requiredQualifications: string[]
+    preferredQualifications: string[]
+    otherInfo: string
+    fullText: string
+}
+
 function withOrigin(origin: string, maybeRelative?: string): string {
     if (!maybeRelative) return origin
     if (maybeRelative.startsWith('http://') || maybeRelative.startsWith('https://')) return maybeRelative
@@ -145,6 +167,172 @@ function buildMicrosoftSearchEndpoint(careerUrl: string, start: number): string 
     params.set('filter_include_remote', careers.searchParams.get('filter_include_remote') || '0')
     return endpoint.toString()
 }
+
+// ─── Microsoft Detail Fetching ──────────────────────────────────────────────
+
+/**
+ * Fetch full job details from Microsoft's detail API.
+ * Uses the internal position ID (the large numeric id from search results).
+ */
+async function fetchMicrosoftJobDetail(internalId: number | string): Promise<MicrosoftDetailResponse | null> {
+    try {
+        const url = `https://apply.careers.microsoft.com/api/apply/v2/jobs/${internalId}?domain=microsoft.com`
+        const resp = await fetch(url, {
+            headers: {
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            },
+        })
+        if (!resp.ok) return null
+        return await resp.json() as MicrosoftDetailResponse
+    } catch {
+        return null
+    }
+}
+
+/**
+ * Convert HTML to clean text, only adding newlines for block-level elements.
+ * Unlike cleanHtml(), this preserves inline elements (<span>, <strong>, <a>, etc.)
+ * so words aren't broken apart.
+ */
+function msHtmlToText(html: string): string {
+    if (!html) return ''
+    return html
+        // Block-level breaks
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(?:p|div|h[1-6])>/gi, '\n')
+        .replace(/<(?:p|div|h[1-6])[^>]*>/gi, '')
+        .replace(/<\/li>/gi, '\n')
+        .replace(/<li[^>]*>/gi, '• ')
+        .replace(/<\/?(ul|ol)[^>]*>/gi, '')
+        // Strip all remaining tags (inline: span, strong, a, em, b, etc.)
+        .replace(/<[^>]+>/g, '')
+        // Decode entities
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        // Collapse whitespace
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n /g, '\n')
+        .replace(/ \n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
+/**
+ * Extract <li> items from HTML, returning clean text for each.
+ * Handles nested lists by flattening.
+ */
+function extractHtmlListItems(html: string): string[] {
+    const items: string[] = []
+    const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi
+    let m: RegExpExecArray | null
+    while ((m = liRegex.exec(html)) !== null) {
+        const text = m[1]
+            // Strip nested <ul>/<ol> (handled by outer loop)
+            .replace(/<ul[^>]*>[\s\S]*?<\/ul>/gi, '')
+            .replace(/<ol[^>]*>[\s\S]*?<\/ol>/gi, '')
+            // Strip all remaining tags
+            .replace(/<[^>]+>/g, '')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim()
+        if (text.length > 5) items.push(text)
+    }
+    return items
+}
+
+/**
+ * Parse Microsoft's HTML job_description into structured sections.
+ * Works directly on HTML to preserve inline formatting and extract list items properly.
+ */
+function parseMicrosoftDescription(html: string): MicrosoftParsedSections {
+    // Split by major section headers: <b>Overview</b>, <b>Responsibilities</b>, <b>Qualifications</b>
+    const sectionRegex = /<b>\s*(Overview|Responsibilities|Qualifications)\s*<\/b>/gi
+    const markers: { name: string; index: number; end: number }[] = []
+    let m: RegExpExecArray | null
+    while ((m = sectionRegex.exec(html)) !== null) {
+        markers.push({ name: m[1].toLowerCase(), index: m.index, end: m.index + m[0].length })
+    }
+
+    const htmlSections: Record<string, string> = {}
+    for (let i = 0; i < markers.length; i++) {
+        const start = markers[i].end
+        const end = markers[i + 1]?.index ?? html.length
+        htmlSections[markers[i].name] = html.slice(start, end)
+    }
+
+    // Overview → clean text
+    const overview = msHtmlToText(htmlSections['overview'] || '')
+
+    // Responsibilities → extract list items
+    const respHtml = htmlSections['responsibilities'] || ''
+    const respItems = extractHtmlListItems(respHtml)
+    const responsibilities = respItems.length > 0
+        ? respItems.map(item => `• ${item}`).join('\n')
+        : msHtmlToText(respHtml)
+
+    // Qualifications → split by <strong> sub-headers in HTML
+    const qualsHtml = htmlSections['qualifications'] || ''
+
+    // Required qualifications
+    const reqMatch = qualsHtml.match(
+        /Required\s+Qualifications?\s*:?\s*<\/(?:strong|b|p)>([\s\S]*?)(?=<(?:p|strong)[^>]*>\s*(?:<strong>)?\s*(?:Other\s+Requirements?|Preferred)|<hr|<p>\s*#|$)/i
+    )
+    // Other requirements (append to required)
+    const otherReqMatch = qualsHtml.match(
+        /Other\s+Requirements?\s*:?\s*<\/(?:strong|b|p)>([\s\S]*?)(?=<(?:p|strong)[^>]*>\s*(?:<strong>)?\s*Preferred|<hr|<p>\s*#|$)/i
+    )
+    // Preferred qualifications
+    const prefMatch = qualsHtml.match(
+        /Preferred\s+[Qq]ualifications?\s*:?\s*<\/(?:strong|b|p)>([\s\S]*?)(?=<p>\s*#|<hr|<br\s*\/?>\s*<br\s*\/?>\s*<p>\s*(?:Software\s+Engineering|The\s+typical)|$)/i
+    )
+
+    const requiredQualifications = extractHtmlListItems(reqMatch?.[1] || '')
+    const preferredQualifications = extractHtmlListItems(prefMatch?.[1] || '')
+
+    // Add "Other Requirements" as a single item to required
+    if (otherReqMatch) {
+        const otherText = msHtmlToText(otherReqMatch[1])
+        if (otherText.length > 10) {
+            requiredQualifications.push(otherText)
+        }
+    }
+
+    // Other info — pay range, position info at the bottom of the full HTML
+    // Pattern: "Role Level IC/M# - The typical base pay..." or "The typical base pay..."
+    const payMatch = html.match(
+        /<p>\s*(?:[A-Z][A-Za-z\s&/]+IC\d+|[A-Z][A-Za-z\s&/]+M\d+|The\s+typical\s+base|Microsoft\s+will\s+accept|Software\s+Engineering)\s*[\-–—]?\s*The\s+typical[\s\S]*?(?=<br\s*\/?>\s*<hr|<hr|$)/i
+    ) || html.match(
+        /<p>\s*(?:The\s+typical\s+base|Microsoft\s+will\s+accept)([\s\S]*?)(?=<br\s*\/?>\s*<hr|<hr|$)/i
+    )
+    let otherInfo = payMatch ? msHtmlToText(payMatch[0]) : ''
+    // Remove hashtags
+    otherInfo = otherInfo.replace(/#\w+\s*/g, '').trim()
+    otherInfo = otherInfo.replace(/\n{3,}/g, '\n\n').trim()
+
+    // Full text for signal detection
+    const fullText = msHtmlToText(html)
+
+    return {
+        overview,
+        responsibilities,
+        requiredQualifications,
+        preferredQualifications,
+        otherInfo,
+        fullText,
+    }
+}
+
+// ─── Nvidia Scrapers ────────────────────────────────────────────────────────
 
 async function runNvidiaApiPages(
     config: PCSXConfig,
@@ -220,7 +408,7 @@ async function runNvidiaApiPages(
                 title,
                 location,
                 location_type: determineLocationType(location),
-                department: p.department || 'General',
+                department: normalizeDepartment(p.department || 'General', title),
                 employment_type: determineEmploymentType(title),
                 posted_date: postedDate,
                 description: textForSignals,
@@ -339,7 +527,7 @@ async function runNvidiaWorkdayPages(
 
                 const postedDate = parseNvidiaPostedOn(p.postedOn)
                 if (postedDate) hasAnyPostedDate = true
-                if (requireDate && (!postedDate || !isWithinDaysOrFuture(postedDate, config.dateWindowDays))) {
+                if (!postedDate || !isWithinDaysOrFuture(postedDate, config.dateWindowDays)) {
                     dateSkipped++
                     continue
                 }
@@ -363,10 +551,11 @@ async function runNvidiaWorkdayPages(
 
                 const detail = details?.jobPostingInfo
                 const detailDescription = cleanHtml(detail?.jobDescription || '')
+                const quals = parseDescriptionQualifications(detailDescription)
                 const detailLocation = detail?.location?.trim() || location
                 const detailPosted = parseNvidiaPostedOn(detail?.postedOn) || parsePostedDate(detail?.startDate || null) || postedDate
                 if (detailPosted) hasAnyPostedDate = true
-                if (requireDate && (!detailPosted || !isWithinDaysOrFuture(detailPosted, config.dateWindowDays))) {
+                if (!detailPosted || !isWithinDaysOrFuture(detailPosted, config.dateWindowDays)) {
                     dateSkipped++
                     continue
                 }
@@ -389,13 +578,13 @@ async function runNvidiaWorkdayPages(
                     title: detail?.title?.trim() || title,
                     location: detailLocation,
                     location_type: determineLocationType(detailLocation, detailDescription),
-                    department: 'General',
+                    department: normalizeDepartment('General', detail?.title?.trim() || title),
                     employment_type: determineEmploymentType(`${detail?.timeType || ''} ${title}`),
-                    posted_date: detailPosted || new Date().toISOString().split('T')[0],
+                    posted_date: detailPosted as string,
                     description: textForSignals,
                     summary: `${title} at ${config.companyName} - ${detailLocation}`,
-                    required_qualifications: [],
-                    preferred_qualifications: [],
+                    required_qualifications: quals.required,
+                    preferred_qualifications: quals.preferred,
                     pay_range: extractPayRange(textForSignals),
                     security_clearance: detectSecurityClearance(textForSignals),
                     h1b_sponsorship: detectH1BSponsorship(textForSignals),
@@ -426,6 +615,12 @@ async function runNvidiaWorkdayPages(
     }
 }
 
+// ─── Microsoft Scraper ──────────────────────────────────────────────────────
+
+/**
+ * Collect Microsoft jobs from search API, then enrich each with full detail content
+ * from the /api/apply/v2/jobs/{id} detail API.
+ */
 async function runMicrosoftApiPages(
     config: PCSXConfig,
     company: { id: number; name: string },
@@ -433,12 +628,16 @@ async function runMicrosoftApiPages(
     maxPages: number,
     requireDate: boolean,
 ) {
+    // Track internal IDs for detail fetching
+    const jobInternalIds = new Map<string, number>()
     const collectedJobs: DbJob[] = []
     const seenIds = new Set<string>()
     let hasAnyPostedDate = false
     const origin = new URL(careerUrl).origin
     let staleDatePages = 0
 
+    // Phase 1: Collect jobs from search API
+    console.log('📋 Phase 1: Collecting jobs from search API...')
     for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
         const start = (pageNum - 1) * config.pageSize
         console.log(`📄 Page ${pageNum} (start=${start})...`)
@@ -468,10 +667,10 @@ async function runMicrosoftApiPages(
         let dateSkipped = 0
 
         for (const p of positions) {
-            const id = String(p.displayJobId || p.atsJobId || p.id || '')
+            const displayId = String(p.displayJobId || p.atsJobId || p.id || '')
             const title = (p.name || '').trim()
-            if (!id || !title || seenIds.has(id)) continue
-            seenIds.add(id)
+            if (!displayId || !title || seenIds.has(displayId)) continue
+            seenIds.add(displayId)
 
             const postedDate = parsePostedDate(p.postedTs || p.creationTs || null)
             if (postedDate) hasAnyPostedDate = true
@@ -486,32 +685,30 @@ async function runMicrosoftApiPages(
                 continue
             }
 
-            const externalJobId = String(p.displayJobId || p.atsJobId || p.id)
-            const finalTitle = title
-            const combinedText = cleanHtml([
-                `Job number: ${externalJobId}`,
-                postedDate ? `Date posted: ${postedDate}` : '',
-                `Location: ${location}`,
-                p.department ? `Department: ${p.department}` : '',
-            ].filter(Boolean).join('\n'))
+            const externalJobId = displayId
             const detailsUrl = withOrigin(origin, p.positionUrl || `${config.jobUrlBase}${externalJobId}`)
+
+            // Store internal ID for detail fetching (the large numeric id)
+            if (p.id) {
+                jobInternalIds.set(externalJobId, p.id)
+            }
 
             const job: DbJob = {
                 company_id: company.id,
                 external_job_id: `microsoft_${externalJobId}`,
-                title: finalTitle,
+                title,
                 location,
-                location_type: determineLocationType(location, combinedText),
-                department: p.department || 'General',
-                employment_type: determineEmploymentType(finalTitle),
-                posted_date: postedDate || new Date().toISOString().split('T')[0],
-                description: combinedText,
-                summary: `${finalTitle} at ${config.companyName} - ${location}`,
+                location_type: determineLocationType(location),
+                department: normalizeDepartment(p.department || 'General', title),
+                employment_type: determineEmploymentType(title),
+                posted_date: postedDate as string,
+                description: '',
+                summary: `${title} at ${config.companyName} - ${location}`,
                 required_qualifications: [],
                 preferred_qualifications: [],
-                pay_range: extractPayRange(combinedText),
-                security_clearance: detectSecurityClearance(combinedText),
-                h1b_sponsorship: detectH1BSponsorship(combinedText),
+                pay_range: 'Not specified',
+                security_clearance: 'N/A',
+                h1b_sponsorship: 'N/A',
                 job_url: detailsUrl,
                 is_active: true,
             }
@@ -543,8 +740,82 @@ async function runMicrosoftApiPages(
     if (requireDate && !hasAnyPostedDate) {
         return { hasDate: false, jobs: [] as DbJob[] }
     }
+
+    // Phase 2: Enrich each job with full detail content
+    console.log(`\n📝 Phase 2: Enriching ${collectedJobs.length} jobs with detail content...`)
+    let enriched = 0
+    let failed = 0
+
+    for (let i = 0; i < collectedJobs.length; i++) {
+        const job = collectedJobs[i]
+        const displayId = job.external_job_id.replace('microsoft_', '')
+        const internalId = jobInternalIds.get(displayId)
+
+        if (!internalId) {
+            failed++
+            continue
+        }
+
+        try {
+            const detail = await fetchMicrosoftJobDetail(internalId)
+            if (detail?.job_description) {
+                const parsed = parseMicrosoftDescription(detail.job_description)
+
+                // Summary = Overview content
+                if (parsed.overview) {
+                    job.summary = parsed.overview
+                }
+
+                // Description = Responsibilities text.
+                // Append other info with a separator so the frontend can split it.
+                const descParts: string[] = []
+                if (parsed.responsibilities) {
+                    descParts.push(parsed.responsibilities)
+                }
+                if (parsed.otherInfo) {
+                    descParts.push('\n---OTHER_INFO---\n' + parsed.otherInfo)
+                }
+                job.description = descParts.join('\n\n') || parsed.fullText
+
+                // Qualifications
+                if (parsed.requiredQualifications.length > 0) {
+                    job.required_qualifications = parsed.requiredQualifications
+                }
+                if (parsed.preferredQualifications.length > 0) {
+                    job.preferred_qualifications = parsed.preferredQualifications
+                }
+
+                // Re-detect signals from full text (now we have the real content)
+                job.security_clearance = detectSecurityClearance(parsed.fullText)
+                job.h1b_sponsorship = detectH1BSponsorship(parsed.fullText)
+                job.pay_range = extractPayRange(parsed.fullText)
+
+                // Update location type from full text
+                job.location_type = determineLocationType(job.location, parsed.fullText)
+
+                enriched++
+            } else {
+                failed++
+            }
+        } catch {
+            failed++
+        }
+
+        // Log progress every 25 jobs
+        if ((i + 1) % 25 === 0 || i === collectedJobs.length - 1) {
+            console.log(`   📝 Progress: ${i + 1}/${collectedJobs.length} (${enriched} enriched, ${failed} failed)`)
+        }
+
+        // Rate limit detail API calls
+        await sleep(randomDelay(200, 500))
+    }
+
+    console.log(`   ✅ Enrichment complete: ${enriched} enriched, ${failed} failed out of ${collectedJobs.length}`)
+
     return { hasDate: hasAnyPostedDate, jobs: collectedJobs }
 }
+
+// ─── Main Scrape Functions ──────────────────────────────────────────────────
 
 async function scrapeNvidiaViaApi(
     config: PCSXConfig,
@@ -569,16 +840,10 @@ async function scrapeNvidiaViaApi(
                 console.log('✅ Using secondary URL with posting dates.')
                 result = second
             } else {
-                console.log('⚠️ Secondary URL also has no posting dates. Using first 20 pages.')
-                result = sourceUrl.includes('myworkdayjobs.com')
-                    ? await runNvidiaWorkdayPages(config, company, sourceUrl, 20, false)
-                    : await runNvidiaApiPages(config, company, sourceUrl, 20, false)
+                console.log('⚠️ Secondary URL also has no posting dates. Skipping Nvidia jobs.')
             }
         } else {
-            console.log('⚠️ No secondary URL. Using first 20 pages from primary URL.')
-            result = careerUrl.includes('myworkdayjobs.com')
-                ? await runNvidiaWorkdayPages(config, company, careerUrl, 20, false)
-                : await runNvidiaApiPages(config, company, careerUrl, 20, false)
+            console.log('⚠️ No secondary URL and no posting dates found. Skipping Nvidia jobs.')
         }
     }
 
@@ -601,7 +866,7 @@ async function scrapeMicrosoftViaApi(
     company: { id: number; name: string; careers_url: string | null; careers_url_1: string | null },
     careerUrl: string,
 ) {
-    console.log(`🌐 Using Microsoft API mode`)
+    console.log(`🌐 Using Microsoft API mode (with detail enrichment)`)
 
     let sourceUrl = careerUrl
     let result = await runMicrosoftApiPages(config, company, careerUrl, config.maxPages, true)
@@ -615,12 +880,10 @@ async function scrapeMicrosoftViaApi(
                 console.log('✅ Using secondary URL with posting dates.')
                 result = second
             } else {
-                console.log('⚠️ Secondary URL also has no posting dates. Using first 20 pages.')
-                result = await runMicrosoftApiPages(config, company, sourceUrl, 20, false)
+                console.log('⚠️ Secondary URL also has no posting dates. Skipping Microsoft jobs.')
             }
         } else {
-            console.log('⚠️ No secondary URL. Using first 20 pages from primary URL.')
-            result = await runMicrosoftApiPages(config, company, careerUrl, 20, false)
+            console.log('⚠️ No secondary URL and no posting dates found. Skipping Microsoft jobs.')
         }
     }
 
@@ -670,7 +933,8 @@ if (!companyArg) {
     process.exit(1)
 }
 
-scrapePCSXJobs(companyArg).catch(err => {
+const companyName = companyArg === 'nvidia' ? 'Nvidia' : 'Microsoft'
+withScraperRun(companyName, () => scrapePCSXJobs(companyArg)).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

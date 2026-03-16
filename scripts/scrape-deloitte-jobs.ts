@@ -15,6 +15,8 @@ import {
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
     sleep, randomDelay,
+    withScraperRun, parseDescriptionQualifications,
+    normalizeDepartment,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -141,14 +143,15 @@ async function runDeloitteSource(
                 const detail = extractJobDetailData(html)
                 if (detail.datePosted) hasAnyDate = true
 
-                if (requireDate && (!detail.datePosted || !isWithinDaysOrFuture(detail.datePosted, CONFIG.dateWindowDays))) {
+                if (!detail.datePosted || !isWithinDaysOrFuture(detail.datePosted, CONFIG.dateWindowDays)) {
                     pageDateSkipped++
                     continue
                 }
 
                 const meta = parseLocationAndDepartment(c.locationLine)
                 const description = detail.description || cleanHtml(c.title)
-                const postedDate = detail.datePosted || new Date().toISOString().split('T')[0]
+                const quals = parseDescriptionQualifications(description)
+                const postedDate = detail.datePosted
                 const fullText = `${c.title}\n${description}`
 
                 const job: DbJob = {
@@ -157,13 +160,13 @@ async function runDeloitteSource(
                     title: c.title,
                     location: meta.location,
                     location_type: determineLocationType(meta.location, description),
-                    department: meta.department,
+                    department: normalizeDepartment(meta.department, c.title),
                     employment_type: determineEmploymentType(c.title),
                     posted_date: postedDate,
                     description,
                     summary: createSummary(description),
-                    required_qualifications: [],
-                    preferred_qualifications: [],
+                    required_qualifications: quals.required,
+                    preferred_qualifications: quals.preferred,
                     pay_range: extractPayRange(description),
                     security_clearance: detectSecurityClearance(fullText),
                     h1b_sponsorship: detectH1BSponsorship(fullText),
@@ -223,12 +226,10 @@ async function scrapeDeloitteJobs() {
                 console.log('✅ Using secondary URL with posting dates.')
                 result = second
             } else {
-                console.log('⚠️ Secondary URL also has no posting dates. Using first 20 pages.')
-                result = await runDeloitteSource(company.id, secondaryUrl, CONFIG.maxPagesNoDate, false)
+                console.log('⚠️ Secondary URL also has no posting dates. Skipping Deloitte jobs.')
             }
         } else {
-            console.log('⚠️ No secondary URL. Using first 20 pages from primary URL.')
-            result = await runDeloitteSource(company.id, primaryUrl, CONFIG.maxPagesNoDate, false)
+            console.log('⚠️ No secondary URL and no posting dates found. Skipping Deloitte jobs.')
         }
     }
 
@@ -244,7 +245,7 @@ async function scrapeDeloitteJobs() {
     logSummary(CONFIG.companyName, result.jobs.length, upsertedCount, dbCount, sourceUrl)
 }
 
-scrapeDeloitteJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeDeloitteJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

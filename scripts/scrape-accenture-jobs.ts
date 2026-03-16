@@ -12,7 +12,9 @@ import {
     cleanHtml, createSummary, extractPayRange,
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
+    normalizeDepartment,
     sleep, randomDelay,
+    withScraperRun, htmlToText, extractHtmlListItems,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -193,18 +195,27 @@ async function scrapeAccentureJobs() {
                     ? detailUrlRaw.replace('{0}', 'us-en')
                     : `https://www.accenture.com/us-en/careers/jobdetails?id=${reqId}_en`
 
-                const description = cleanHtml([
-                    r.jobDescriptionClean || r.jobDescription || '',
-                    r.qualificationClean || r.qualification || '',
-                    r.additionalInformation || '',
-                ].filter(Boolean).join('\n\n'))
+                const descriptionHtml = r.jobDescriptionClean || r.jobDescription || ''
+                const qualificationHtml = r.qualificationClean || r.qualification || ''
+                const additionalInfo = r.additionalInformation || ''
 
-                const department = [
+                const description = htmlToText(descriptionHtml)
+
+                const qualItems = extractHtmlListItems(qualificationHtml)
+                const required_qualifications = qualItems.length > 0 ? qualItems : []
+
+                const additionalText = htmlToText(additionalInfo)
+                const finalDescription = additionalText
+                    ? description + '\n\n---OTHER_INFO---\n' + additionalText
+                    : description
+
+                const departmentRaw = [
                     r.businessArea || '',
                     ...(Array.isArray(r.function) ? r.function : []),
                 ].filter(Boolean).join(' / ') || 'General'
+                const department = normalizeDepartment(departmentRaw, title)
 
-                const fullText = `${title}\n${description}\n${location}`
+                const fullText = `${title}\n${description}\n${htmlToText(qualificationHtml)}\n${location}`
 
                 const job: DbJob = {
                     company_id: company.id,
@@ -215,9 +226,9 @@ async function scrapeAccentureJobs() {
                     department: department.slice(0, 240),
                     employment_type: determineEmploymentType(`${r.employeeType || r.jobScheduleDescription || r.jobTypeDescription || ''} ${title}`),
                     posted_date: postedDate,
-                    description,
+                    description: finalDescription,
                     summary: createSummary(description),
-                    required_qualifications: [],
+                    required_qualifications,
                     preferred_qualifications: [],
                     pay_range: extractPayRange(description),
                     security_clearance: detectSecurityClearance(fullText),
@@ -271,7 +282,7 @@ async function scrapeAccentureJobs() {
     }
 }
 
-scrapeAccentureJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeAccentureJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

@@ -14,7 +14,8 @@ import {
     cleanHtml, extractPayRange,
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
-    sleep, randomDelay,
+    normalizeDepartment,
+    sleep, randomDelay, withScraperRun,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -70,7 +71,7 @@ async function runMetaViaGraphQL(baseUrl: string, pages: number, requireDate: bo
             if (!req.url().includes('/graphql') || req.method() !== 'POST') return
             const body = req.postData() || ''
             const params = new URLSearchParams(body)
-            if (params.get('fb_api_req_friendly_name') === 'CareersJobSearchResultsV3DataQuery') {
+            if (params.get('fb_api_req_friendly_name') === 'CareersJobSearchResultsDataQuery') {
                 capturedResultsRequest = body
             }
         })
@@ -105,7 +106,6 @@ async function runMetaViaGraphQL(baseUrl: string, pages: number, requireDate: bo
 
         const collected: ExtractedJob[] = []
         const seen = new Set<string>()
-        let hasAnyPostedDate = false
 
         for (const j of limitedJobs) {
             const id = String(j.id || '').trim()
@@ -115,9 +115,8 @@ async function runMetaViaGraphQL(baseUrl: string, pages: number, requireDate: bo
 
             const locations = Array.isArray(j.locations) ? j.locations.filter(Boolean) : []
             const location = locations[0] || 'United States'
+            // Meta's GraphQL API does not return posting dates
             const dateText = ''
-            const parsed = parsePostedDate(looksLikeDate(dateText))
-            if (parsed) hasAnyPostedDate = true
 
             const dept = [
                 ...(Array.isArray(j.teams) ? j.teams : []),
@@ -141,11 +140,8 @@ async function runMetaViaGraphQL(baseUrl: string, pages: number, requireDate: bo
             })
         }
 
-        if (requireDate && !hasAnyPostedDate) {
-            return { hasDate: false, jobs: [] as ExtractedJob[] }
-        }
-
-        return { hasDate: hasAnyPostedDate, jobs: collected }
+        // Meta GraphQL API does not provide posting dates
+        return { hasDate: false, jobs: collected }
     } finally {
         await browser.close()
     }
@@ -157,31 +153,12 @@ async function scrapeMetaJobs() {
     console.log(`✅ Company: ${company.name} (id: ${company.id})`)
 
     const primaryUrl = company.careers_url || 'https://www.metacareers.com/jobsearch?sort_by_new=true&offices[0]=North%20America'
-    const fallbackUrl = company.careers_url_1
 
-    console.log(`🔗 Primary URL: ${primaryUrl}`)
-    if (fallbackUrl) console.log(`🔁 Secondary URL: ${fallbackUrl}`)
+    console.log(`🔗 URL: ${primaryUrl}`)
 
-    let sourceUrl = primaryUrl
-    let result = await runMetaViaGraphQL(primaryUrl, CONFIG.maxPages, true)
-
-    if (!result.hasDate) {
-        console.log('⚠️ No posting date in primary jobs.')
-        if (fallbackUrl) {
-            sourceUrl = fallbackUrl
-            const second = await runMetaViaGraphQL(fallbackUrl, CONFIG.maxPages, true)
-            if (second.hasDate) {
-                console.log('✅ Using secondary URL with posting dates.')
-                result = second
-            } else {
-                console.log('⚠️ Secondary URL also has no posting dates. Using first 20 pages.')
-                result = await runMetaViaGraphQL(fallbackUrl, CONFIG.maxPagesNoDate, false)
-            }
-        } else {
-            console.log('⚠️ No secondary URL. Using first 20 pages from primary URL.')
-            result = await runMetaViaGraphQL(primaryUrl, CONFIG.maxPagesNoDate, false)
-        }
-    }
+    // Meta's GraphQL API does not provide posting dates — collect all US jobs
+    const sourceUrl = primaryUrl
+    const result = await runMetaViaGraphQL(primaryUrl, CONFIG.maxPages, false)
 
     const collectedJobs: DbJob[] = []
     const seen = new Set<string>()
@@ -211,7 +188,7 @@ async function scrapeMetaJobs() {
             title: safeTitle,
             location: safeLocation,
             location_type: determineLocationType(safeLocation, description),
-            department: safeDepartment,
+            department: normalizeDepartment(safeDepartment, safeTitle),
             employment_type: determineEmploymentType(safeTitle),
             posted_date: finalPostedDate,
             description,
@@ -234,12 +211,12 @@ async function scrapeMetaJobs() {
     }
 
     console.log(`🗄️  Upserting ${collectedJobs.length} jobs...`)
-    const upsertedCount = await upsertJobsBatch(collectedJobs)
+    const upsertedCount = await upsertJobsBatch(collectedJobs, 50, true)
     const dbCount = await getCompanyJobCount(company.id)
     logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, sourceUrl)
 }
 
-scrapeMetaJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeMetaJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

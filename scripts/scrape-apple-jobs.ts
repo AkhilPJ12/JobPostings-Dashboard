@@ -18,7 +18,8 @@ import {
     isWithinDaysOrFuture, parsePostedDate, extractPayRange,
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
-    sleep, randomDelay,
+    normalizeDepartment,
+    sleep, randomDelay, withScraperRun,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -92,7 +93,11 @@ async function scrapeAppleJobs() {
                 seenIds.add(j.id)
 
                 const postedDate = parsePostedDate(j.dateText)
-                if (postedDate && !isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
+                if (!postedDate) {
+                    skipped++
+                    continue
+                }
+                if (!isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
                     oldJobCount++
                     skipped++
                     continue
@@ -104,9 +109,9 @@ async function scrapeAppleJobs() {
                     title: j.title,
                     location: j.location || 'United States',
                     location_type: determineLocationType(j.location),
-                    department: 'General',
+                    department: normalizeDepartment('General', j.title),
                     employment_type: determineEmploymentType(j.title),
-                    posted_date: postedDate || new Date().toISOString().split('T')[0],
+                    posted_date: postedDate,
                     description: j.text,
                     summary: `${j.title} at Apple - ${j.location}`,
                     required_qualifications: [],
@@ -159,7 +164,7 @@ async function scrapeAppleJobs() {
     }
 }
 
-scrapeAppleJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeAppleJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })

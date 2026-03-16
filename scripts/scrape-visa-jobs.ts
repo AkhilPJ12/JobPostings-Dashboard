@@ -12,6 +12,8 @@ import {
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
     sleep, randomDelay,
+    withScraperRun, htmlToText, parseDescriptionQualifications,
+    normalizeDepartment,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -136,14 +138,19 @@ async function scrapeVisaJobs() {
             const locationParts = [j.city, j.region, j.countryCode?.toUpperCase()].filter(Boolean)
             const location = locationParts.join(', ') || 'United States'
 
-            const description = cleanHtml([
-                j.jobDescription || '',
-                j.qualifications || '',
-                j.additionalInformation || '',
-            ].join('\n\n'))
+            const jobDesc = htmlToText(j.jobDescription || '')
+            const qualText = htmlToText(j.qualifications || '')
+            const additionalText = htmlToText(j.additionalInformation || '')
+
+            const quals = parseDescriptionQualifications(qualText)
+
+            // Use jobDescription as main description, append additional info
+            const description = additionalText
+                ? jobDesc + '\n\n---OTHER_INFO---\n' + additionalText
+                : jobDesc
 
             const dept = j.superDepartment || j.department || j.function || 'General'
-            const textForSignals = `${title}\n${description}`
+            const textForSignals = `${title}\n${jobDesc}\n${qualText}\n${additionalText}`
 
             const job: DbJob = {
                 company_id: company.id,
@@ -151,13 +158,13 @@ async function scrapeVisaJobs() {
                 title,
                 location,
                 location_type: determineLocationType(location, description),
-                department: dept,
+                department: normalizeDepartment(dept, title),
                 employment_type: determineEmploymentType(j.typeOfEmployment || title),
                 posted_date: postedDate,
                 description,
-                summary: createSummary(description),
-                required_qualifications: [],
-                preferred_qualifications: [],
+                summary: createSummary(jobDesc),
+                required_qualifications: quals.required.length > 0 ? quals.required : [],
+                preferred_qualifications: quals.preferred.length > 0 ? quals.preferred : [],
                 pay_range: extractPayRange(description),
                 security_clearance: detectSecurityClearance(textForSignals),
                 h1b_sponsorship: detectH1BSponsorship(textForSignals),
@@ -203,7 +210,7 @@ async function scrapeVisaJobs() {
     logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
 }
 
-scrapeVisaJobs().catch(err => {
+withScraperRun(CONFIG.companyName, scrapeVisaJobs).catch(err => {
     console.error('💥 Fatal error:', err)
     process.exit(1)
 })
