@@ -5,11 +5,8 @@ const nextConfig = {
   },
   images: {
     remotePatterns: [
-      { hostname: 'www.vectorlogo.zone' },
-      { hostname: 'upload.wikimedia.org' },
-      { hostname: 'cdn-icons-png.freepik.com' },
-      { hostname: 'cdn-icons-png.flaticon.com' },
-      { hostname: 'altaseamedia.s3.us-west-1.amazonaws.com' },
+      // Allow any HTTPS image source — company icons come from various domains
+      { protocol: 'https', hostname: '**' },
     ],
   },
 }

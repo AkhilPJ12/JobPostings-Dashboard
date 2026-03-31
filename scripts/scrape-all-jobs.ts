@@ -11,7 +11,7 @@
 
 import { spawn } from 'child_process'
 import * as path from 'path'
-import { supabase, cleanupOldJobs } from './scraper-utils'
+import { supabase, cleanupOldJobs, purgeInactiveJobs } from './scraper-utils'
 
 const SCRAPERS = [
     { name: 'Amazon', script: 'scrape-amazon-jobs.ts' },
@@ -26,6 +26,24 @@ const SCRAPERS = [
     { name: 'Visa', script: 'scrape-visa-jobs.ts' },
     { name: 'JPMorgan Chase', script: 'scrape-jpmorgan-jobs.ts' },
     { name: 'Deloitte', script: 'scrape-deloitte-jobs.ts' },
+    // Workday-based companies
+    { name: 'CVS', script: 'scrape-workday-jobs.ts', args: ['CVS'] },
+    { name: 'AT&T', script: 'scrape-workday-jobs.ts', args: ['AT&T'] },
+    { name: 'Walmart', script: 'scrape-workday-jobs.ts', args: ['Walmart'] },
+    // Oracle HCM
+    { name: 'Texas Instruments', script: 'scrape-ti-jobs.ts' },
+    // Detail-page scrapers
+    { name: 'Staples', script: 'scrape-staples-jobs.ts' },
+    { name: 'Intuit', script: 'scrape-intuit-jobs.ts' },
+    { name: 'Datavant', script: 'scrape-datavant-jobs.ts' },
+    { name: 'Wellsfargo', script: 'scrape-wellsfargo-jobs.ts' },
+    { name: 'Infosys', script: 'scrape-infosys-jobs.ts' },
+    { name: 'CarMax', script: 'scrape-workday-jobs.ts', args: ['CarMax'] },
+    { name: 'Goldman Sachs', script: 'scrape-goldmansachs-jobs.ts' },
+    { name: 'Wipro', script: 'scrape-wipro-jobs.ts' },
+    // API-only scrapers (no browser needed)
+    { name: 'Anthropic', script: 'scrape-anthropic-jobs.ts' },
+    { name: 'OpenAI', script: 'scrape-openai-jobs.ts' },
 ]
 
 type RunStatus = 'Successful' | 'Error' | 'Partial'
@@ -182,8 +200,10 @@ async function main() {
     console.log(`🧾 Run Group ID: ${runGroupId}`)
     console.log(`📅 Started: ${new Date().toLocaleString()}\n`)
 
-    // Cleanup jobs older than 14 days before starting
+    // Soft-delete jobs older than 14 days (marks is_active=false)
     await cleanupOldJobs(14)
+    // Hard-delete jobs that have been inactive for 180+ days
+    await purgeInactiveJobs(180)
 
     const results: ScraperResult[] = []
 

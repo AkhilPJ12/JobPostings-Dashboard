@@ -8,8 +8,8 @@ This project has two core parts:
 
 ## Documentation Index
 
-- [Scrapers Technical Guide](./scrapers.md)
-- [Project Change Logs](./logs.md)
+- [Scrapers Technical Guide](./docs/scrapers.md)
+- [Project Change Logs](./docs/logs.md)
 
 ## Architecture
 
@@ -156,31 +156,46 @@ Note:
 - Individual scraper scripts update `jobs`.
 - `scraper_runs` is updated by `scrape-all-jobs.ts` (master runner).
 
-## Supported Companies (Current)
+## Supported Companies (26)
 
-- Amazon
-- Microsoft (PCSX)
-- Nvidia (PCSX / Workday path)
-- Google
-- Meta
-- Apple
-- IBM
-- Salesforce
-- Accenture
-- Visa
-- JPMorgan Chase
-- Deloitte
+| Company | Scraper | Date Source |
+|---|---|---|
+| Amazon | `scrape-amazon-jobs.ts` | API |
+| Microsoft | `scrape-pcsx-jobs.ts` | API |
+| Nvidia | `scrape-pcsx-jobs.ts` | Workday API |
+| Google | `scrape-google-jobs.ts` | Detail page |
+| Meta | `scrape-meta-jobs.ts` | First-seen |
+| Apple | `scrape-apple-jobs.ts` | List + detail |
+| IBM | `scrape-ibm-jobs.ts` | API |
+| Salesforce | `scrape-salesforce-jobs.ts` | List page |
+| Accenture | `scrape-accenture-jobs.ts` | API |
+| Visa | `scrape-visa-jobs.ts` | API |
+| JPMorgan Chase | `scrape-jpmorgan-jobs.ts` | API |
+| Deloitte | `scrape-deloitte-jobs.ts` | List page |
+| CVS | `scrape-workday-jobs.ts` | Workday API |
+| AT&T | `scrape-workday-jobs.ts` | Workday API |
+| Walmart | `scrape-workday-jobs.ts` | Workday API |
+| CarMax | `scrape-workday-jobs.ts` | Workday API |
+| Texas Instruments | `scrape-ti-jobs.ts` | Detail page |
+| Staples | `scrape-staples-jobs.ts` | Detail page |
+| Intuit | `scrape-intuit-jobs.ts` | First-seen |
+| Datavant | `scrape-datavant-jobs.ts` | Greenhouse API |
+| Wells Fargo | `scrape-wellsfargo-jobs.ts` | Detail page |
+| Infosys | `scrape-infosys-jobs.ts` | First-seen |
+| Goldman Sachs | `scrape-goldmansachs-jobs.ts` | First-seen |
+| Wipro | `scrape-wipro-jobs.ts` | Detail page |
+| Anthropic | `scrape-anthropic-jobs.ts` | Greenhouse API |
+| OpenAI | `scrape-openai-jobs.ts` | Ashby API |
 
-## Scraper Rules Implemented
+## Scraper Rules
 
-Common policy in this project:
-- Prefer postings with valid `posted_date`.
-- Use date window filtering (typically last 14 days, with future-date allowance where needed).
-- If date is missing for a source, scrapers follow fallback logic:
-- try secondary career URL (`careers_url_1`) where supported,
-- otherwise scrape fallback pages (often first 20 pages) per company strategy.
-
-All scrapers upsert by deterministic external IDs to prevent duplicate jobs.
+- Prefer postings with valid `posted_date` (last 14 days).
+- Companies without dates (Meta, Intuit, Infosys, Goldman Sachs) use "first-seen date" pattern: today's date for new jobs, preserved on re-runs via `preservePostedDate`.
+- Jobs older than 14 days are soft-deleted (`is_active = false`) by `cleanupOldJobs(14)`.
+- Inactive jobs are permanently purged after 180 days by `purgeInactiveJobs(180)`.
+- Soft-delete prevents zombie re-insertion for no-date companies — `preservePostedDate` checks inactive rows to restore original dates.
+- All scrapers upsert by deterministic external IDs to prevent duplicate jobs.
+- Shared utilities in `scraper-utils.ts`: `truncateField`, `parseSlashDate`, `parseDayMonthYear`, `parseRelativePostedDate`, `launchBrowser`.
 
 ## Status View in UI
 

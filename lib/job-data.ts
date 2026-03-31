@@ -316,13 +316,13 @@ export async function getScraperStatuses(): Promise<ScraperStatus[]> {
         (companies || []).map((c, i) => [c.id, jobCounts[i] as number])
     )
 
-    if ((runsResult as { error: unknown }).error) {
-        // Gracefully handle missing table / permission while UI is already deployed.
-        console.error('Error fetching scraper runs:', (runsResult as { error: unknown }).error)
+    const runsError = (runsResult as { error: { message?: string } | null }).error
+    if (runsError && (runsError.message || Object.keys(runsError).length > 0)) {
+        console.error('Error fetching scraper runs:', runsError)
         return companyNames.map((name) => ({
             companyName: name,
             companyIcon: companyIconMap.get(name) ?? null,
-            status: "Not Run",
+            status: "Not Run" as const,
             lastScrapedAt: null,
             durationSeconds: null,
             errorMessage: null,

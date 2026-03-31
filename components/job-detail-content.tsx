@@ -100,6 +100,20 @@ function getJobNumber(externalJobId: string): string {
   return parts.length > 1 ? parts.slice(1).join("_") : externalJobId
 }
 
+function sanitizeText(text: string): string {
+  if (!text) return ""
+  return text
+    // Strip any JS code that leaked through scrapers
+    .replace(/function\s+\w+\s*\([^)]*\)\s*\{[\s\S]*?\}/g, '')
+    .replace(/window\.\w+[\w.]*\([^)]*\)/g, '')
+    .replace(/document\.\w+[\w.]*\([^)]*\)/g, '')
+    // Strip HTML tags
+    .replace(/<[^>]+>/g, '')
+    // Collapse excessive whitespace
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function parseDescriptionSections(description: string): {
   responsibilities: string
   otherInfo: string
@@ -108,8 +122,8 @@ function parseDescriptionSections(description: string): {
   const separator = "---OTHER_INFO---"
   const parts = description.split(separator)
   return {
-    responsibilities: parts[0]?.trim() || "",
-    otherInfo: parts[1]?.trim() || "",
+    responsibilities: sanitizeText(parts[0] || ""),
+    otherInfo: sanitizeText(parts[1] || ""),
   }
 }
 
@@ -271,7 +285,7 @@ export function JobDetailContent({ job }: { job: Job }) {
             <section className="rounded-2xl border border-border/60 bg-card p-6">
               <SectionHeading icon={Briefcase}>Summary</SectionHeading>
               <p className="mt-4 leading-relaxed text-muted-foreground whitespace-pre-line">
-                {job.summary}
+                {sanitizeText(job.summary)}
               </p>
             </section>
           )}

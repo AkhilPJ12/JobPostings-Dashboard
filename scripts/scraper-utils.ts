@@ -292,6 +292,9 @@ export function isWithinDays(dateStr: string | null, days: number): boolean {
 export function cleanHtml(html: string): string {
     if (!html) return ''
     return html
+        // Strip script and style tags with their content
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<\/?(p|div|li|ul|ol|h[1-6]|span|a|strong|em|b|i)[^>]*>/gi, '\n')
         .replace(/<[^>]+>/g, '')
@@ -301,6 +304,9 @@ export function cleanHtml(html: string): string {
         .replace(/&gt;/g, '>')
         .replace(/&quot;/g, '"')
         .replace(/&#39;/g, "'")
+        // Strip remaining JS code patterns that leak through
+        .replace(/function\s+\w+\s*\([^)]*\)\s*\{[\s\S]*?\}/g, '')
+        .replace(/window\.\w+[\w.]*\([^)]*\)/g, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim()
 }
@@ -499,13 +505,18 @@ export async function upsertJobsBatch(
     for (let i = 0; i < jobs.length; i += batchSize) {
         const batch = jobs.slice(i, i + batchSize)
 
-        // When preservePostedDate=true (e.g. Meta, Google), keep the original
-        // posted_date for jobs we've seen before — only new jobs get today's date.
+        // When preservePostedDate=true (e.g. Meta, Intuit), keep the original
+        // posted_date for jobs we've seen before — only truly new jobs get today's date.
+        // Also checks inactive (soft-deleted) jobs to prevent zombie re-insertion:
+        // if a job was deactivated with an old date, restore that old date so it
+        // stays old and gets deactivated again, never reappearing as "new".
         if (preservePostedDate) {
+            const externalIds = batch.map(j => j.external_job_id)
+            // Check both active AND inactive jobs for existing dates
             const { data: existing } = await supabase
                 .from('jobs')
-                .select('external_job_id, posted_date')
-                .in('external_job_id', batch.map(j => j.external_job_id))
+                .select('external_job_id, posted_date, is_active')
+                .in('external_job_id', externalIds)
                 .not('posted_date', 'is', null)
 
             const existingDates = new Map(
@@ -514,6 +525,8 @@ export async function upsertJobsBatch(
             for (const job of batch) {
                 const saved = existingDates.get(job.external_job_id)
                 if (saved) job.posted_date = saved
+                // Ensure re-upserted jobs are marked active
+                job.is_active = true
             }
         }
 
@@ -574,9 +587,14 @@ export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
     cutoffDate.setDate(cutoffDate.getDate() - retentionDays)
     const cutoff = cutoffDate.toISOString().split('T')[0]
 
+    // Soft-delete: mark as inactive instead of hard-deleting.
+    // This prevents zombie re-insertion for no-date companies (Meta, Intuit, etc.)
+    // whose scrapers use preservePostedDate — they can check inactive rows
+    // and restore the original old date, so the job won't reappear as "new".
     const { error, count } = await supabase
         .from('jobs')
-        .delete({ count: 'exact' })
+        .update({ is_active: false })
+        .eq('is_active', true)
         .lt('posted_date', cutoff)
 
     if (error) {
@@ -584,11 +602,38 @@ export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
         return 0
     }
 
-    const deleted = count || 0
-    if (deleted > 0) {
-        console.log(`🧹 Cleaned up ${deleted} jobs older than ${retentionDays} days (before ${cutoff})`)
+    const deactivated = count || 0
+    if (deactivated > 0) {
+        console.log(`🧹 Deactivated ${deactivated} jobs older than ${retentionDays} days (before ${cutoff})`)
     }
-    return deleted
+    return deactivated
+}
+
+/**
+ * Permanently delete jobs that have been inactive for a long time.
+ * Prevents indefinite storage growth from soft-deleted rows.
+ */
+export async function purgeInactiveJobs(retentionDays = 180): Promise<number> {
+    const cutoffDate = new Date()
+    cutoffDate.setDate(cutoffDate.getDate() - retentionDays)
+    const cutoff = cutoffDate.toISOString()
+
+    const { error, count } = await supabase
+        .from('jobs')
+        .delete({ count: 'exact' })
+        .eq('is_active', false)
+        .lt('updated_at', cutoff)
+
+    if (error) {
+        console.warn(`⚠️ Could not purge inactive jobs: ${error.message}`)
+        return 0
+    }
+
+    const purged = count || 0
+    if (purged > 0) {
+        console.log(`🗑️ Purged ${purged} inactive jobs older than ${retentionDays} days`)
+    }
+    return purged
 }
 
 // ─── Scraper Run Persistence ─────────────────────────────────────────────────
@@ -756,4 +801,81 @@ export function htmlToText(html: string): string {
         .replace(/[ \t]+/g, ' ')
         .replace(/\n{3,}/g, '\n\n')
         .trim()
+}
+
+// ─── Shared Utility Helpers ───────────────────────────────────────────────────
+
+/**
+ * Truncate a string to fit within a DB varchar column.
+ * Safe default of 250 chars for varchar(255) columns.
+ */
+export function truncateField(value: string | null | undefined, maxLen = 250): string {
+    if (!value) return ''
+    return value.length > maxLen ? value.slice(0, maxLen) : value
+}
+
+/**
+ * Parse MM/DD/YYYY or M/D/YY date format into ISO string.
+ * Handles: "03/30/2026" → "2026-03-30", "3/5/26" → "2026-03-05"
+ */
+export function parseSlashDate(dateStr: string): string | null {
+    const m = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/)
+    if (!m) return null
+    let year = m[3]
+    if (year.length === 2) year = '20' + year
+    return `${year}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`
+}
+
+/**
+ * Parse "DD Mon YYYY" date format into ISO string.
+ * Handles: "30 Mar 2026" → "2026-03-30"
+ */
+export function parseDayMonthYear(dateStr: string): string | null {
+    const months: Record<string, string> = {
+        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+    }
+    const m = dateStr.match(/(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})/i)
+    if (!m) return null
+    const month = months[m[2].toLowerCase()]
+    if (!month) return null
+    return `${m[3]}-${month}-${m[1].padStart(2, '0')}`
+}
+
+/**
+ * Parse relative date text like "Posted today", "Posted 3 days ago",
+ * "Posted yesterday", or an absolute date after "Posted on".
+ */
+export function parseRelativePostedDate(text: string | null | undefined): string | null {
+    if (!text) return null
+    const raw = text.trim()
+    if (!raw) return null
+    if (/posted\s+today/i.test(raw)) return new Date().toISOString().split('T')[0]
+    if (/posted\s+yesterday/i.test(raw)) {
+        const d = new Date(); d.setDate(d.getDate() - 1)
+        return d.toISOString().split('T')[0]
+    }
+    const daysAgo = raw.match(/posted\s+(\d+)\s+days?\s+ago/i)
+    if (daysAgo) {
+        const d = new Date(); d.setDate(d.getDate() - Number(daysAgo[1]))
+        return d.toISOString().split('T')[0]
+    }
+    const cleaned = raw.replace(/^posted\s+on\s+/i, '').replace(/^posted\s+/i, '').trim()
+    return parsePostedDate(cleaned)
+}
+
+/**
+ * Launch a headless browser with standard scraper configuration.
+ * Returns { browser, context } — caller must close browser in finally block.
+ */
+export async function launchBrowser(options?: {
+    viewport?: { width: number; height: number }
+}) {
+    const { chromium } = await import('playwright')
+    const browser = await chromium.launch({ headless: true })
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        viewport: options?.viewport ?? { width: 1280, height: 900 },
+    })
+    return { browser, context }
 }

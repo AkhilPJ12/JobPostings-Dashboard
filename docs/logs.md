@@ -186,3 +186,117 @@
   - button opens `job.jobUrl` (company job page) in a new tab,
   - disabled `Apply` button shown when URL is unavailable.
 - Updated `__tests__/frontend/job-card.test.tsx` mock job object to include `jobUrl`.
+
+---
+
+## 2026-03-15
+
+### 1. Deployment to Vercel
+- Removed `generateStaticParams()` from `app/jobs/[id]/page.tsx` to avoid pre-building 7000+ static pages (exceeded Vercel Hobby plan size limits).
+- Added `dynamicParams = true` + `revalidate = 300` for on-demand ISR.
+- Fixed `pnpm-lock.yaml` — was in `.gitignore`, causing `ERR_PNPM_OUTDATED_LOCKFILE` on Vercel.
+- Fixed git author email for Vercel deployment verification.
+
+### 2. Posted Date Strictness
+- Made all scrapers (except Meta/Google) strict — skip jobs without posted dates.
+- Removed `new Date()` fallback from Apple, Microsoft, Nvidia, Deloitte scrapers.
+- Added `preservePostedDate` pattern for Meta/Google — first-seen date preserved on re-scrapes.
+
+### 3. GitHub Actions CI
+- Added `.github/workflows/scrape-jobs.yml` — cron every 6 hours (`0 */6 * * *`).
+- Installs Playwright Chromium, runs `scrape-all-jobs.ts` with Supabase secrets.
+
+---
+
+## 2026-03-16
+
+### 1. Apple Scraper — Full Detail Page Scraping
+- Updated `scrape-apple-jobs.ts` to fetch full detail pages (summary, description, responsibilities, qualifications).
+- Phase 1 collects job links from list pages, Phase 2 fetches details in parallel batches of 4.
+- Selectors: `h2.t-label` sidebar labels + adjacent `div.column.large-9` content blocks.
+
+### 2. UI Fixes
+- Fixed double X in search bar — changed `type="search"` to `type="text"` to remove browser's native clear button.
+- Fixed "Today" date filter — uses local date string instead of UTC to avoid evening-timezone mismatch.
+- Replaced "Last 30 days" filter with "Last 14 days" to match actual DB retention window.
+
+---
+
+## 2026-03-30
+
+### 1. New Company Scrapers (12 companies added)
+- **Generic Workday scraper** (`scrape-workday-jobs.ts`): Reusable for any `*.myworkdayjobs.com` site. Uses CXS API. Handles CVS, AT&T, Walmart, CarMax.
+- **Texas Instruments** (`scrape-ti-jobs.ts`): Oracle HCM career site, MM/DD/YYYY dates on detail pages.
+- **Staples** (`scrape-staples-jobs.ts`): Paginated list → detail page scraping. Dates on detail page (MM/DD/YYYY).
+- **Intuit** (`scrape-intuit-jobs.ts`): Client-side pagination with "Date Posted" sort. No dates — uses first-seen pattern.
+- **Datavant** (`scrape-datavant-jobs.ts`): Pure Greenhouse API (no browser needed, 1-second runs). Real dates via `first_published`.
+- **Wells Fargo** (`scrape-wellsfargo-jobs.ts`): 1300+ US jobs, paginated list → detail pages. Dates in "DD Mon YYYY" format.
+- **Infosys** (`scrape-infosys-jobs.ts`): Multi-URL support (careers_url + careers_url_1). No dates — uses first-seen pattern.
+- **Goldman Sachs** (`scrape-goldmansachs-jobs.ts`): GraphQL API via browser context. No dates — uses first-seen pattern.
+- **Wipro** (`scrape-wipro-jobs.ts`): Paginated list → detail pages. Real dates via "Posting Start Date" field.
+- Updated `scrape-all-jobs.ts` with all 24 companies.
+
+### 2. Data Quality Fixes
+- Fixed Salesforce — all 319 descriptions contained JavaScript cookie consent code (`OptanonWrapper`). Root cause: `fetchSalesforceDetail` was capturing full 404 page HTML. Fix: added 404 detection + `cleanHtml` now strips `<script>` and `<style>` tags.
+- Cleaned 171 dirty Salesforce descriptions directly in DB.
+- Fixed trailing spaces in company names ("Texas Instruments ", "Goldman Sachs ").
+
+### 3. Code Refactoring
+- Added shared utilities to `scraper-utils.ts`:
+  - `truncateField(value, maxLen=250)` — protects against varchar(255) DB overflows.
+  - `parseSlashDate(str)` — MM/DD/YYYY parser (replaces 3 local duplicates).
+  - `parseDayMonthYear(str)` — "DD Mon YYYY" parser (replaces 1 local duplicate).
+  - `parseRelativePostedDate(str)` — "Posted X days ago" parser (replaces 1 local duplicate).
+  - `launchBrowser(options)` — standard browser context factory (dynamic import).
+- Fixed critical truncation bugs in `scrape-workday-jobs.ts` and `scrape-ti-jobs.ts` (had NO field truncation).
+- Removed duplicate `isUSLocation()` from `scrape-datavant-jobs.ts`.
+- Updated `cleanHtml()` to strip `<script>`, `<style>` tags and leaked JS patterns.
+
+### 4. Test Expansion
+- Added 17 new tests to `__tests__/backend/scraper-utils.test.ts` (16 → 33 total):
+  - `truncateField` — short, long, null/undefined
+  - `parseSlashDate` — MM/DD/YYYY, M/D/YY, 2-digit year, invalid
+  - `parseDayMonthYear` — "DD Mon YYYY", case-insensitive, invalid
+  - `parseRelativePostedDate` — today, yesterday, X days ago, null
+  - `cleanHtml` script stripping — `<script>`, `<style>`, leaked JS functions
+
+### 5. Repo Restructuring
+- Deleted 102K lines of junk files:
+  - `data.md` (10MB), `google-body.html` + `google-debug.html` (2.6MB), debug scripts, old planning docs, one-time migration scripts.
+- Removed 37 unused shadcn/ui components (50 → 13).
+- Moved docs to `docs/` folder.
+- Cleaned `.gitignore` — removed duplicates (120 → 50 lines).
+
+### 6. Companies Without Scrapers
+- **American Airlines**: CDN (Akamai) blocks all headless browsers and direct curl. Skipped.
+- **Infosys, Goldman Sachs, Intuit, Meta**: No posting dates available — using first-seen date pattern.
+
+### 7. Anthropic & OpenAI Scrapers
+- **Anthropic** (`scrape-anthropic-jobs.ts`): Greenhouse API (`boards-api.greenhouse.io/v1/boards/anthropic`). Real dates via `first_published`. 31 US jobs. 1-second runs.
+- **OpenAI** (`scrape-openai-jobs.ts`): Ashby API (`api.ashbyhq.com/posting-api/job-board/openai`). Real dates via `publishedAt`. 50 US jobs. 1-second runs.
+- Both are pure API scrapers — no browser needed.
+- Added to `scrape-all-jobs.ts`. Total: 26 companies.
+
+### 8. Zombie Job Prevention (Soft-Delete)
+- **Problem**: Companies without posted dates (Meta, Intuit, Infosys, Goldman Sachs) use first-seen date. After 14-day cleanup deletes the job, the next scraper run re-inserts it with a fresh date — creating an infinite zombie cycle.
+- **Fix**:
+  - `cleanupOldJobs()` now sets `is_active = false` instead of `DELETE` (soft-delete).
+  - `upsertJobsBatch()` with `preservePostedDate = true` now checks both active AND inactive rows. If an inactive row exists with an old date, that old date is restored — so the job stays old and gets deactivated again.
+  - New `purgeInactiveJobs(180)` hard-deletes rows inactive for 180+ days to prevent storage growth.
+  - Called from `scrape-all-jobs.ts`: `cleanupOldJobs(14)` then `purgeInactiveJobs(180)`.
+
+### 9. GitHub Actions Schedule Update
+- Changed from every 6 hours to 3x daily at specific times:
+  - 7 AM CST (13:00 UTC)
+  - 2 PM CST (20:00 UTC)
+  - 10 PM CST (04:00 UTC)
+
+### 10. Next.js Image Config
+- Changed `next.config.mjs` image `remotePatterns` from whitelist to `{ protocol: 'https', hostname: '**' }` to allow any HTTPS image source. Prevents crashes when new companies with icons from unknown domains are added.
+
+### Current State
+- **26 active scrapers** covering 25 companies (American Airlines blocked by CDN).
+- **10,500+ active jobs** in database.
+- **0 stale jobs** (>14 days), **0 null dates**.
+- Zombie prevention via soft-delete for no-date companies.
+- Tests: 33/33 passing. Build: passing.

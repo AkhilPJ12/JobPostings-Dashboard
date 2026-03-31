@@ -50,6 +50,10 @@ async function fetchSalesforceDetail(context: BrowserContext, url: string) {
         const resp = await context.request.get(url)
         if (!resp.ok()) return { postedDate: null as string | null, description: '' }
         const html = await resp.text()
+        // Detect soft 404 / "Page Not Found" pages
+        if (html.includes('Page Not Found') || html.includes('page you requested could not be found')) {
+            return { postedDate: null as string | null, description: '' }
+        }
         const text = cleanHtml(html)
         const postedRaw = text.match(/Posted\s+([0-9]{1,2}\s+\w+\s+[0-9]{4}|\w+\s+[0-9]{1,2},\s*[0-9]{4})/i)?.[1] || null
         const postedDate = parsePostedDate(postedRaw)
