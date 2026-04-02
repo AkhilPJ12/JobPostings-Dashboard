@@ -7,32 +7,45 @@ on:
   workflow_dispatch:          # allow manual trigger from GitHub UI
 
 jobs:
-  scrape:
+  # Fast job: API-only scrapers — no Playwright needed (~2 min)
+  scrape-api:
     runs-on: ubuntu-latest
-    timeout-minutes: 90       # 26 scrapers sequential, each up to 10 min
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+      - uses: pnpm/action-setup@v3
         with:
           version: 8
+      - run: pnpm install
 
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install chromium --with-deps
-
-      - name: Run all scrapers
+      - name: Run API scrapers (parallel)
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-        run: npx tsx scripts/scrape-all-jobs.ts
+        run: npx tsx scripts/scrape-all-jobs.ts --api-only
+
+  # Slow job: Browser scrapers — needs Playwright (~40 min)
+  scrape-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 8
+      - run: pnpm install
+      - run: pnpm exec playwright install chromium --with-deps
+
+      - name: Run browser scrapers (sequential)
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: npx tsx scripts/scrape-all-jobs.ts --browser-only

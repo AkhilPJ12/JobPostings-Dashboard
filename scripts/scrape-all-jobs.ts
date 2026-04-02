@@ -13,37 +13,37 @@ import { spawn } from 'child_process'
 import * as path from 'path'
 import { supabase, cleanupOldJobs, purgeInactiveJobs } from './scraper-utils'
 
+// Each scraper is tagged as 'api' (no Playwright) or 'browser' (needs Playwright).
+// API scrapers run in parallel first, then browser scrapers run sequentially.
 const SCRAPERS = [
-    { name: 'Amazon', script: 'scrape-amazon-jobs.ts' },
-    { name: 'Microsoft', script: 'scrape-pcsx-jobs.ts', args: ['microsoft'] },
-    { name: 'Nvidia', script: 'scrape-pcsx-jobs.ts', args: ['nvidia'] },
-    { name: 'Google', script: 'scrape-google-jobs.ts' },
-    { name: 'Meta', script: 'scrape-meta-jobs.ts' },
-    { name: 'Apple', script: 'scrape-apple-jobs.ts' },
-    { name: 'IBM', script: 'scrape-ibm-jobs.ts' },
-    { name: 'Salesforce', script: 'scrape-salesforce-jobs.ts' },
-    { name: 'Accenture', script: 'scrape-accenture-jobs.ts' },
-    { name: 'Visa', script: 'scrape-visa-jobs.ts' },
-    { name: 'JPMorgan Chase', script: 'scrape-jpmorgan-jobs.ts' },
-    { name: 'Deloitte', script: 'scrape-deloitte-jobs.ts' },
-    // Workday-based companies
-    { name: 'CVS', script: 'scrape-workday-jobs.ts', args: ['CVS'] },
-    { name: 'AT&T', script: 'scrape-workday-jobs.ts', args: ['AT&T'] },
-    { name: 'Walmart', script: 'scrape-workday-jobs.ts', args: ['Walmart'] },
-    // Oracle HCM
-    { name: 'Texas Instruments', script: 'scrape-ti-jobs.ts' },
-    // Detail-page scrapers
-    { name: 'Staples', script: 'scrape-staples-jobs.ts' },
-    { name: 'Intuit', script: 'scrape-intuit-jobs.ts' },
-    { name: 'Datavant', script: 'scrape-datavant-jobs.ts' },
-    { name: 'Wellsfargo', script: 'scrape-wellsfargo-jobs.ts' },
-    { name: 'Infosys', script: 'scrape-infosys-jobs.ts' },
-    { name: 'CarMax', script: 'scrape-workday-jobs.ts', args: ['CarMax'] },
-    { name: 'Goldman Sachs', script: 'scrape-goldmansachs-jobs.ts' },
-    { name: 'Wipro', script: 'scrape-wipro-jobs.ts' },
-    // API-only scrapers (no browser needed)
-    { name: 'Anthropic', script: 'scrape-anthropic-jobs.ts' },
-    { name: 'OpenAI', script: 'scrape-openai-jobs.ts' },
+    // API-only scrapers (no browser — run in parallel for speed)
+    { name: 'Amazon', script: 'scrape-amazon-jobs.ts', type: 'api' as const },
+    { name: 'IBM', script: 'scrape-ibm-jobs.ts', type: 'api' as const },
+    { name: 'Visa', script: 'scrape-visa-jobs.ts', type: 'api' as const },
+    { name: 'JPMorgan Chase', script: 'scrape-jpmorgan-jobs.ts', type: 'api' as const },
+    { name: 'Datavant', script: 'scrape-datavant-jobs.ts', type: 'api' as const },
+    { name: 'Anthropic', script: 'scrape-anthropic-jobs.ts', type: 'api' as const },
+    { name: 'OpenAI', script: 'scrape-openai-jobs.ts', type: 'api' as const },
+    // Browser scrapers (need Playwright — run sequentially)
+    { name: 'Microsoft', script: 'scrape-pcsx-jobs.ts', args: ['microsoft'], type: 'browser' as const },
+    { name: 'Nvidia', script: 'scrape-pcsx-jobs.ts', args: ['nvidia'], type: 'browser' as const },
+    { name: 'Google', script: 'scrape-google-jobs.ts', type: 'browser' as const },
+    { name: 'Meta', script: 'scrape-meta-jobs.ts', type: 'browser' as const },
+    { name: 'Apple', script: 'scrape-apple-jobs.ts', type: 'browser' as const },
+    { name: 'Salesforce', script: 'scrape-salesforce-jobs.ts', type: 'browser' as const },
+    { name: 'Accenture', script: 'scrape-accenture-jobs.ts', type: 'browser' as const },
+    { name: 'Deloitte', script: 'scrape-deloitte-jobs.ts', type: 'browser' as const },
+    { name: 'CVS', script: 'scrape-workday-jobs.ts', args: ['CVS'], type: 'browser' as const },
+    { name: 'AT&T', script: 'scrape-workday-jobs.ts', args: ['AT&T'], type: 'browser' as const },
+    { name: 'Walmart', script: 'scrape-workday-jobs.ts', args: ['Walmart'], type: 'browser' as const },
+    { name: 'CarMax', script: 'scrape-workday-jobs.ts', args: ['CarMax'], type: 'browser' as const },
+    { name: 'Texas Instruments', script: 'scrape-ti-jobs.ts', type: 'browser' as const },
+    { name: 'Staples', script: 'scrape-staples-jobs.ts', type: 'browser' as const },
+    { name: 'Intuit', script: 'scrape-intuit-jobs.ts', type: 'browser' as const },
+    { name: 'Wellsfargo', script: 'scrape-wellsfargo-jobs.ts', type: 'browser' as const },
+    { name: 'Infosys', script: 'scrape-infosys-jobs.ts', type: 'browser' as const },
+    { name: 'Goldman Sachs', script: 'scrape-goldmansachs-jobs.ts', type: 'browser' as const },
+    { name: 'Wipro', script: 'scrape-wipro-jobs.ts', type: 'browser' as const },
 ]
 
 type RunStatus = 'Successful' | 'Error' | 'Partial'
@@ -182,7 +182,11 @@ async function main() {
 
     let scrapersToRun = SCRAPERS
 
-    if (filterArg) {
+    if (filterArg === '--api-only') {
+        scrapersToRun = SCRAPERS.filter(s => s.type === 'api')
+    } else if (filterArg === '--browser-only') {
+        scrapersToRun = SCRAPERS.filter(s => s.type === 'browser')
+    } else if (filterArg) {
         const matched = SCRAPERS.filter(s =>
             s.name.toLowerCase().includes(filterArg) ||
             s.script.toLowerCase().includes(filterArg)
@@ -190,6 +194,7 @@ async function main() {
         if (matched.length === 0) {
             console.error(`❌ No scraper found matching: ${filterArg}`)
             console.log(`Available scrapers: ${SCRAPERS.map(s => s.name).join(', ')}`)
+            console.log(`Flags: --api-only, --browser-only`)
             process.exit(1)
         }
         scrapersToRun = matched
@@ -206,18 +211,37 @@ async function main() {
     await purgeInactiveJobs(180)
 
     const results: ScraperResult[] = []
+    const apiScrapers = scrapersToRun.filter(s => s.type === 'api')
+    const browserScrapers = scrapersToRun.filter(s => s.type === 'browser')
 
-    for (const scraper of scrapersToRun) {
-        const result = await runScraper(scraper, runGroupId)
-        results.push(result)
+    // Phase 1: Run API scrapers in parallel (no browser needed, fast)
+    if (apiScrapers.length > 0) {
+        console.log(`\n⚡ Phase 1: Running ${apiScrapers.length} API scrapers in parallel...`)
+        const apiResults = await Promise.all(
+            apiScrapers.map(s => runScraper(s, runGroupId))
+        )
+        for (const result of apiResults) {
+            results.push(result)
+            const icon = result.status === 'Successful' ? '✅' : result.status === 'Partial' ? '⚠️' : '❌'
+            console.log(`${icon} ${result.name}: ${result.status} in ${result.duration}s`)
+        }
+    }
 
-        if (result.status === 'Successful') {
-            console.log(`\n✅ ${result.name}: Successful in ${result.duration}s`)
-        } else if (result.status === 'Partial') {
-            console.log(`\n⚠️ ${result.name}: Partial in ${result.duration}s`)
-        } else {
-            console.log(`\n❌ ${result.name}: Failed after ${result.duration}s`)
-            console.log(`   Error: ${result.error?.slice(0, 200)}`)
+    // Phase 2: Run browser scrapers sequentially (share system resources)
+    if (browserScrapers.length > 0) {
+        console.log(`\n🌐 Phase 2: Running ${browserScrapers.length} browser scrapers sequentially...`)
+        for (const scraper of browserScrapers) {
+            const result = await runScraper(scraper, runGroupId)
+            results.push(result)
+
+            if (result.status === 'Successful') {
+                console.log(`\n✅ ${result.name}: Successful in ${result.duration}s`)
+            } else if (result.status === 'Partial') {
+                console.log(`\n⚠️ ${result.name}: Partial in ${result.duration}s`)
+            } else {
+                console.log(`\n❌ ${result.name}: Failed after ${result.duration}s`)
+                console.log(`   Error: ${result.error?.slice(0, 200)}`)
+            }
         }
     }
 
