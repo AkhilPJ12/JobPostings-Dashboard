@@ -345,7 +345,7 @@ export function JobDashboard({
             <div className="mx-auto max-w-[1600px] px-4 lg:px-6 py-8">
               <div className="mb-5">
                 <h1 className="gradient-text text-2xl font-bold mb-1.5">Find Your Dream Job</h1>
-                <p className="text-muted-foreground text-sm">Aggregated from {companyCount}+ top companies · Updated every 6 hours</p>
+                <p className="text-muted-foreground text-sm">Aggregated from {companyCount}+ top companies · Updated twice daily</p>
               </div>
 
               {/* Search + note */}

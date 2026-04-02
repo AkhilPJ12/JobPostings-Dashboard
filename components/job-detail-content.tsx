@@ -102,14 +102,32 @@ function getJobNumber(externalJobId: string): string {
 
 function sanitizeText(text: string): string {
   if (!text) return ""
-  return text
+  let cleaned = text
     // Strip any JS code that leaked through scrapers
     .replace(/function\s+\w+\s*\([^)]*\)\s*\{[\s\S]*?\}/g, '')
     .replace(/window\.\w+[\w.]*\([^)]*\)/g, '')
     .replace(/document\.\w+[\w.]*\([^)]*\)/g, '')
     // Strip HTML tags
     .replace(/<[^>]+>/g, '')
-    // Collapse excessive whitespace
+
+  // Strip leading metadata lines from Workday/PCSX scrapers
+  // Pattern: "Title\nLocation\nFull time\n..." before real content
+  const lines = cleaned.split('\n')
+  let startIdx = 0
+  for (let i = 0; i < Math.min(lines.length, 5); i++) {
+    const line = lines[i].trim()
+    if (!line) continue
+    // Skip lines that look like metadata (short, match common patterns)
+    if (/^(Full time|Part time|Contract|Internship|Temporary)$/i.test(line)) { startIdx = i + 1; continue }
+    // Skip if it matches a location-like pattern (short, contains comma or state abbreviation)
+    if (line.length < 60 && /,\s*(US|CA|TX|NY|WA|MA|IL|GA|CO|OR|PA|VA|MD|NC|OH|FL|AZ|NV|MN|MO|WI|TN|IN|MI|NJ|CT)\b/i.test(line)) { startIdx = i + 1; continue }
+    break
+  }
+  if (startIdx > 0) {
+    cleaned = lines.slice(startIdx).join('\n')
+  }
+
+  return cleaned
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
