@@ -96,6 +96,12 @@ function StatusRow({ row }: { row: ScraperStatus }) {
           )}>
             {row.companyName}
           </p>
+          {/* Health warning: scraper ran successfully but found 0 jobs */}
+          {row.status === "Successful" && row.totalJobs === 0 && (
+            <span className="shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded">
+              0 jobs
+            </span>
+          )}
         </div>
 
         {/* Jobs count */}

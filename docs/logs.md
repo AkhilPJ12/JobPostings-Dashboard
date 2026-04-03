@@ -294,6 +294,12 @@
 ### 10. Next.js Image Config
 - Changed `next.config.mjs` image `remotePatterns` from whitelist to `{ protocol: 'https', hostname: '**' }` to allow any HTTPS image source. Prevents crashes when new companies with icons from unknown domains are added.
 
+### 11. Scraper Reliability & Performance
+- **Google scraper**: Added retry logic with 3 different user agents. Added fallback CSS selectors (structural `li > h3 + a[href*="/results/"]` patterns) for when Google rotates obfuscated class names.
+- **Scraper health alerts**: Added "0 jobs" warning badge in Scraper Status table for scrapers that run successfully but return no jobs.
+- **American Airlines**: Confirmed blocked by Akamai CDN — blocks all headless browsers, non-headless browsers, and direct curl. Uses SAP SuccessFactors but no public API. No workaround available.
+- **Performance**: Split scrapers into API-only (7, parallel via Promise.all) and browser-based (19, sequential). Added `--api-only` and `--browser-only` flags. GitHub Actions split into two parallel jobs.
+
 ### Current State
 - **26 active scrapers** covering 25 companies (American Airlines blocked by CDN).
 - **10,500+ active jobs** in database.

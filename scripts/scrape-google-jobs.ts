@@ -141,10 +141,28 @@ function buildGooglePageUrl(baseUrl: string, pageNum: number): string {
     return url.toString()
 }
 
-async function runGoogleUrl(baseUrl: string, pages: number, requireDate: boolean) {
+const USER_AGENTS = [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+]
+
+async function runGoogleUrl(baseUrl: string, pages: number, requireDate: boolean, retryCount = 0): Promise<ReturnType<typeof _runGoogleUrl>> {
+    const result = await _runGoogleUrl(baseUrl, pages, requireDate, retryCount)
+    // If we got 0 jobs and haven't retried yet, try again with a different user agent
+    if (result.jobs.length === 0 && retryCount < 2) {
+        console.log(`⚠️ Google returned 0 jobs. Retrying with different user agent (attempt ${retryCount + 2}/3)...`)
+        await sleep(randomDelay(3000, 6000))
+        return runGoogleUrl(baseUrl, pages, requireDate, retryCount + 1)
+    }
+    return result
+}
+
+async function _runGoogleUrl(baseUrl: string, pages: number, requireDate: boolean, retryCount = 0) {
+    const ua = USER_AGENTS[retryCount % USER_AGENTS.length]
     const browser = await chromium.launch({ headless: true })
     const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        userAgent: ua,
         viewport: { width: 1280, height: 900 },
     })
     const page = await context.newPage()
@@ -163,12 +181,22 @@ async function runGoogleUrl(baseUrl: string, pages: number, requireDate: boolean
             await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
             await sleep(randomDelay(1400, 2600))
 
+            // Extract jobs using primary selectors, with fallback to structural patterns
             let jobs = await page.evaluate(() => {
-                const cards = Array.from(document.querySelectorAll('li.lLd3Je'))
+                // Primary selectors (Google's current class names — may change)
+                let cards = Array.from(document.querySelectorAll('li.lLd3Je'))
+                // Fallback: find job list items by structure (li with h3 + link containing /results/)
+                if (cards.length === 0) {
+                    cards = Array.from(document.querySelectorAll('li'))
+                        .filter(li => li.querySelector('h3') && li.querySelector('a[href*="/results/"]'))
+                }
                 return cards.map(card => {
-                    const title = card.querySelector('h3.QJPWVe')?.textContent?.trim() || ''
-                    const location = card.querySelector('span.r0wTof')?.textContent?.trim() || ''
-                    const href = (card.querySelector('a.WpHeLc') as HTMLAnchorElement | null)?.href || ''
+                    const titleEl = card.querySelector('h3.QJPWVe') || card.querySelector('h3')
+                    const title = titleEl?.textContent?.trim() || ''
+                    const locEl = card.querySelector('span.r0wTof') || card.querySelector('span[class*="loc"], span[class*="Loc"]')
+                    const location = locEl?.textContent?.trim() || ''
+                    const linkEl = (card.querySelector('a.WpHeLc') || card.querySelector('a[href*="/results/"]')) as HTMLAnchorElement | null
+                    const href = linkEl?.href || ''
                     const idMatch = href.match(/results\/(\d+)/)
                     const id = idMatch ? idMatch[1] : `${title}_${location}`.replace(/\s+/g, '_').slice(0, 40)
 
@@ -179,17 +207,23 @@ async function runGoogleUrl(baseUrl: string, pages: number, requireDate: boolean
             }) as ExtractedJob[]
 
             if (jobs.length === 0 && pageNum === 1) {
+                console.log('   ⚠️ No jobs found with selectors. Retrying with networkidle...')
                 await page.goto(baseUrl, { waitUntil: 'networkidle', timeout: 60000 })
-                await sleep(2500)
+                await sleep(3000)
                 jobs = await page.evaluate(() => {
-                    const cards = Array.from(document.querySelectorAll('li.lLd3Je'))
+                    let cards = Array.from(document.querySelectorAll('li.lLd3Je'))
+                    if (cards.length === 0) {
+                        cards = Array.from(document.querySelectorAll('li'))
+                            .filter(li => li.querySelector('h3') && li.querySelector('a[href*="/results/"]'))
+                    }
                     return cards.map(card => {
-                        const title = card.querySelector('h3.QJPWVe')?.textContent?.trim() || ''
-                        const location = card.querySelector('span.r0wTof')?.textContent?.trim() || ''
-                        const href = (card.querySelector('a.WpHeLc') as HTMLAnchorElement | null)?.href || ''
+                        const title = (card.querySelector('h3.QJPWVe') || card.querySelector('h3'))?.textContent?.trim() || ''
+                        const location = (card.querySelector('span.r0wTof') || card.querySelector('span[class*="loc"]'))?.textContent?.trim() || ''
+                        const linkEl = (card.querySelector('a.WpHeLc') || card.querySelector('a[href*="/results/"]')) as HTMLAnchorElement | null
+                        const href = linkEl?.href || ''
                         const idMatch = href.match(/results\/(\d+)/)
                         const id = idMatch ? idMatch[1] : `${title}_${location}`.replace(/\s+/g, '_').slice(0, 40)
-                        const dateEl = card.querySelector('[class*="date"], [class*="Date"], time, [aria-label*="Posted"], [aria-label*="posted"]')
+                        const dateEl = card.querySelector('[class*="date"], [class*="Date"], time, [aria-label*="Posted"]')
                         const dateText = dateEl?.textContent?.trim() || ''
                         return { id, title, location, url: href, text: card.textContent || '', dateText }
                     }).filter(j => j.title)
