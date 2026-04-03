@@ -300,9 +300,16 @@
 - **American Airlines**: Confirmed blocked by Akamai CDN — blocks all headless browsers, non-headless browsers, and direct curl. Uses SAP SuccessFactors but no public API. No workaround available.
 - **Performance**: Split scrapers into API-only (7, parallel via Promise.all) and browser-based (19, sequential). Added `--api-only` and `--browser-only` flags. GitHub Actions split into two parallel jobs.
 
+### 12. Company Icon Fixes
+- Fixed 7 broken company icons (Infosys, Intuit, Staples, Texas Instruments, Walmart, Wells Fargo, Wipro).
+- Root cause: Wikimedia Commons rate-limiting automated image requests (HTTP 429).
+- Fix: Replaced Wikimedia URLs with reliable sources (`gstatic.com` favicons, `vectorlogo.zone` SVGs) in the `companies` DB table.
+- Verified all 27 company icons load correctly via Playwright.
+
 ### Current State
 - **26 active scrapers** covering 25 companies (American Airlines blocked by CDN).
 - **10,500+ active jobs** in database.
 - **0 stale jobs** (>14 days), **0 null dates**.
+- All 27 company icons verified working.
 - Zombie prevention via soft-delete for no-date companies.
 - Tests: 33/33 passing. Build: passing.
