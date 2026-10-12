@@ -30,7 +30,7 @@ The ingestion contract and source normalization live under `lib/modules/ingestio
 
 ## Setup and database migration
 
-Use Node 20 and pnpm 9. Run `pnpm install --frozen-lockfile`, then copy `.env.example` to `.env.local` and fill in the Supabase credentials. The anon key is for curated reads; keep the service role key and `OLLAMA_API_KEY` on the server or in GitHub Actions secrets.
+Use Node 24 and pnpm 9. Run `pnpm install --frozen-lockfile`, then copy `.env.example` to `.env.local` and fill in the Supabase credentials. The anon key is for curated reads; keep the service role key and `OLLAMA_API_KEY` on the server or in GitHub Actions secrets.
 
 Apply the existing `scripts/sql/create-scraper-runs.sql` and `scripts/sql/ai-enrichment.sql` first if they have not already been applied. Then apply `scripts/sql/2026-10-10-architecture.sql` and `scripts/sql/2026-10-11-source-provenance.sql` in order. They add source identity and date provenance, restore recoverable source fields from old snapshots, add separate AI results and a durable queue, change run status to history, and install the public read functions. The latest migration hides historical code-inferred categories and facts unless a scraper marks a field as an explicit structured source value. Review the migrations against the actual Supabase schema before running them on production; they revoke direct anon/authenticated access to source and operations tables. The legacy `raw_job_payload` contains a normalized scraper snapshot, not the original HTTP response.
 

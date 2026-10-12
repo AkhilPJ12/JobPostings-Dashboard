@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
 
       - uses: pnpm/action-setup@v3
         with:
@@ -23,7 +23,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
-      - run: pnpm test:unit -- --runInBand
+      - run: pnpm test:unit --runInBand
       - run: pnpm build
 
   db-contracts:
