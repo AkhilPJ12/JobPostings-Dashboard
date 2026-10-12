@@ -1,4 +1,6 @@
 import { navigateSource } from '../lib/modules/ingestion/browser'
+import { noteSourceFailure } from '../lib/modules/ingestion/health'
+import { validSourceUrl } from '../lib/modules/ingestion/urls'
 /**
  * Texas Instruments Jobs Scraper
  *
@@ -39,7 +41,7 @@ async function fetchTIJobDetail(context: BrowserContext, jobUrl: string): Promis
 }> {
     const page = await context.newPage()
     try {
-        await navigateSource(page, jobUrl, { waitUntil: 'networkidle', timeout: 30000 })
+        await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
         await sleep(randomDelay(800, 1500))
 
         const detail = await page.evaluate(() => {
@@ -81,8 +83,10 @@ async function scrapeTIJobs() {
 
     const company = await getCompany(CONFIG.companyName)
     console.log(`✅ Company: ${company.name} (id: ${company.id})`)
+    const deadline = Date.now() + 8 * 60_000
 
-    const urls = [company.careers_url, company.careers_url_1].filter(Boolean) as string[]
+    const urls = [company.careers_url, company.careers_url_1]
+        .map(validSourceUrl).filter((url): url is string => url !== null)
     if (urls.length === 0) {
         console.error('❌ No careers URL')
         return
@@ -95,14 +99,19 @@ async function scrapeTIJobs() {
     })
 
     try {
-        const allJobs: DbJob[] = []
+        let collectedCount = 0
+        let writtenCount = 0
 
         for (const [urlIdx, careerUrl] of urls.entries()) {
+            if (Date.now() >= deadline) {
+                noteSourceFailure('Texas Instruments stopped before the source deadline; listing scan is incomplete')
+                break
+            }
             if (urlIdx > 0) console.log(`\n🔗 Scraping secondary URL (careers_url_1)...`)
             console.log(`🔗 Career URL: ${careerUrl}`)
 
             const page = await context.newPage()
-            await navigateSource(page, careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
+            await navigateSource(page, careerUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
             await sleep(8000)
 
             // Collect all jobs from list page (scroll/paginate)
@@ -166,12 +175,17 @@ async function scrapeTIJobs() {
             // Fetch details in parallel batches
             console.log(`🔍 Fetching detail pages...`)
             for (let i = 0; i < listJobs.length; i += CONFIG.detailConcurrency) {
+                if (Date.now() >= deadline) {
+                    noteSourceFailure('Texas Instruments stopped before the source deadline; detail scan is incomplete')
+                    break
+                }
                 const batch = listJobs.slice(i, i + CONFIG.detailConcurrency)
                 console.log(`   🔍 Details ${i + 1}–${Math.min(i + CONFIG.detailConcurrency, listJobs.length)} / ${listJobs.length}`)
                 const details = await Promise.all(
                     batch.map(j => fetchTIJobDetail(context, j.url))
                 )
 
+                const batchJobs: DbJob[] = []
                 for (let k = 0; k < batch.length; k++) {
                     const j = batch[k]
                     const d = details[k]
@@ -196,23 +210,24 @@ async function scrapeTIJobs() {
                         job_url: truncateField(j.url),
                         is_active: true,
                     }
-                    allJobs.push(job)
+                    batchJobs.push(job)
                 }
+
+                collectedCount += batchJobs.length
+                writtenCount += await upsertJobsBatch(batchJobs)
 
                 await sleep(randomDelay(500, 1000))
             }
         }
 
-        console.log(`\n📊 Total jobs collected: ${allJobs.length}`)
-        if (allJobs.length === 0) {
+        console.log(`\n📊 Total jobs collected: ${collectedCount}`)
+        if (collectedCount === 0) {
             console.log('⚠️  No jobs found.')
             return
         }
 
-        console.log(`\n🗄️  Upserting ${allJobs.length} jobs into Supabase...`)
-        const upsertedCount = await upsertJobsBatch(allJobs)
         const dbCount = await getCompanyJobCount(company.id)
-        logSummary(CONFIG.companyName, allJobs.length, upsertedCount, dbCount, urls[0])
+        logSummary(CONFIG.companyName, collectedCount, writtenCount, dbCount, urls[0])
 
     } finally {
         await browser.close()

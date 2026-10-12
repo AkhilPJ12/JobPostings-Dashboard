@@ -1,4 +1,5 @@
 import { navigateSource } from '../lib/modules/ingestion/browser'
+import { noteSourceFailure } from '../lib/modules/ingestion/health'
 /**
  * Wells Fargo Jobs Scraper
  *
@@ -25,7 +26,7 @@ import {
 const CONFIG = {
     companyName: 'Wellsfargo',
     dateWindowDays: 14,
-    maxPages: 70, // 1345 jobs / 20 per page = ~68 pages
+    maxPages: 12, // Keep listing and detail work inside the ten-minute source deadline.
     detailConcurrency: 4,
 }
 
@@ -95,6 +96,7 @@ async function scrapeWellsFargoJobs() {
 
     const company = await getCompany(CONFIG.companyName)
     console.log(`✅ Company: ${company.name} (id: ${company.id})`)
+    const deadline = Date.now() + 8 * 60_000
 
     const browser = await chromium.launch({ headless: true })
     const context = await browser.newContext({
@@ -107,8 +109,13 @@ async function scrapeWellsFargoJobs() {
         console.log('📋 Phase 1: Collecting job URLs from list pages...')
         const jobUrls: ListJob[] = []
         const seenUrls = new Set<string>()
+        let hitPageLimit = false
 
         for (let pageNum = 1; pageNum <= CONFIG.maxPages; pageNum++) {
+            if (Date.now() >= deadline) {
+                noteSourceFailure('Wells Fargo stopped before the source deadline; listing scan is incomplete')
+                break
+            }
             const url = pageNum === 1
                 ? 'https://www.wellsfargojobs.com/en/jobs/?search=&country=United+States+of+America'
                 : `https://www.wellsfargojobs.com/en/jobs/?page=${pageNum}&country=United+States+of+America`
@@ -141,6 +148,12 @@ async function scrapeWellsFargoJobs() {
                 }
             }
             console.log(`   ✅ ${added} new (${jobUrls.length} total)`)
+            if (added === 0) break
+            if (pageNum === CONFIG.maxPages) hitPageLimit = true
+        }
+
+        if (hitPageLimit) {
+            noteSourceFailure(`Wells Fargo listing scan stopped after ${CONFIG.maxPages} pages; more listings may remain`)
         }
 
         console.log(`\n📋 ${jobUrls.length} job URLs collected. Fetching details...`)
@@ -151,12 +164,17 @@ async function scrapeWellsFargoJobs() {
         }
 
         // Phase 2: Fetch detail pages
-        const collectedJobs: DbJob[] = []
+        let collectedCount = 0
+        let writtenCount = 0
         let dateSkipped = 0
         let noDate = 0
         let consecutiveOld = 0
 
         for (let i = 0; i < jobUrls.length; i += CONFIG.detailConcurrency) {
+            if (Date.now() >= deadline) {
+                noteSourceFailure('Wells Fargo stopped before the source deadline; detail scan is incomplete')
+                break
+            }
             const batch = jobUrls.slice(i, i + CONFIG.detailConcurrency)
             console.log(`🔍 Details ${i + 1}–${Math.min(i + CONFIG.detailConcurrency, jobUrls.length)} / ${jobUrls.length}`)
 
@@ -165,9 +183,15 @@ async function scrapeWellsFargoJobs() {
             )
 
             let batchNew = 0
+            const batchJobs: DbJob[] = []
             for (let k = 0; k < batch.length; k++) {
                 const d = details[k]
-                if (!d || !d.postedDate) { noDate++; continue }
+                if (!d) {
+                    noteSourceFailure('Some Wells Fargo detail pages could not be fetched')
+                    noDate++
+                    continue
+                }
+                if (!d.postedDate) { noDate++; continue }
 
                 const postedDate = parseDayMonthYear(d.postedDate)
                 if (!postedDate) { noDate++; continue }
@@ -199,7 +223,12 @@ async function scrapeWellsFargoJobs() {
                     job_url: batch[k].url,
                     is_active: true,
                 }
-                collectedJobs.push(job)
+                batchJobs.push(job)
+            }
+
+            if (batchJobs.length > 0) {
+                collectedCount += batchJobs.length
+                writtenCount += await upsertJobsBatch(batchJobs)
             }
 
             // Early stop if many consecutive batches have no new jobs
@@ -213,17 +242,15 @@ async function scrapeWellsFargoJobs() {
             await sleep(randomDelay(300, 800))
         }
 
-        console.log(`\n📊 Total: ${collectedJobs.length} jobs (${dateSkipped} date-skipped, ${noDate} no-date)`)
+        console.log(`\n📊 Total: ${collectedCount} jobs (${dateSkipped} date-skipped, ${noDate} no-date)`)
 
-        if (collectedJobs.length === 0) {
+        if (collectedCount === 0) {
             console.log('⚠️  No jobs found.')
             return
         }
 
-        console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs into Supabase...`)
-        const upsertedCount = await upsertJobsBatch(collectedJobs)
         const dbCount = await getCompanyJobCount(company.id)
-        logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount,
+        logSummary(CONFIG.companyName, collectedCount, writtenCount, dbCount,
             company.careers_url || 'https://www.wellsfargojobs.com/en/jobs/')
     } finally {
         await browser.close()

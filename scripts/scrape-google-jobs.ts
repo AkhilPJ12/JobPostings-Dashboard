@@ -1,4 +1,6 @@
 import { navigateSource } from '../lib/modules/ingestion/browser'
+import { noteSourceFailure } from '../lib/modules/ingestion/health'
+import { validSourceUrl } from '../lib/modules/ingestion/urls'
 /**
  * Google Jobs Scraper
  *
@@ -305,9 +307,10 @@ async function scrapeGoogleJobs() {
     console.log(`🚀 Google Jobs Scraper`)
     const company = await getCompany(CONFIG.companyName)
     console.log(`✅ Company: ${company.name} (id: ${company.id})`)
+    const deadline = Date.now() + 8 * 60_000
 
-    const primaryUrl = company.careers_url || 'https://www.google.com/about/careers/applications/jobs/results?location=United%20States&sort_by=date&employment_type=INTERN&employment_type=TEMPORARY&employment_type=FULL_TIME'
-    const fallbackUrl = company.careers_url_1
+    const primaryUrl = validSourceUrl(company.careers_url) || 'https://www.google.com/about/careers/applications/jobs/results?location=United%20States&sort_by=date&employment_type=INTERN&employment_type=TEMPORARY&employment_type=FULL_TIME'
+    const fallbackUrl = validSourceUrl(company.careers_url_1)
 
     console.log(`🔗 Primary URL: ${primaryUrl}`)
     if (fallbackUrl) console.log(`🔁 Secondary URL: ${fallbackUrl}`)
@@ -323,17 +326,23 @@ async function scrapeGoogleJobs() {
             if (second.hasDate) {
                 console.log('✅ Using secondary URL with posting dates.')
                 result = second
-            } else {
-                console.log('⚠️ Secondary URL also has no posting dates. Skipping Google jobs.')
             }
-        } else {
-            console.log('⚠️ No secondary URL and no posting dates found. Skipping Google jobs.')
+        }
+        if (!result.hasDate) {
+            console.log('⚠️ No list posting dates. Checking detail dates from the first 20 primary pages.')
+            noteSourceFailure('Google listing dates unavailable; detail-date scan is limited to 20 pages')
+            sourceUrl = primaryUrl
+            result = await runGoogleUrl(primaryUrl, CONFIG.maxPagesNoDate, false)
         }
     }
 
     const collectedJobs: DbJob[] = []
     let detailFetched = 0
     for (const j of result.jobs) {
+        if (Date.now() >= deadline) {
+            noteSourceFailure('Google stopped before the source deadline; listing details are incomplete')
+            break
+        }
         let postedDate = parsePostedDate(j.dateText || looksLikeDate(j.text))
 
         // If no date from list page, try fetching the detail page JSON-LD
@@ -372,6 +381,7 @@ async function scrapeGoogleJobs() {
 
     console.log(`📊 Total jobs collected (Phase 1): ${collectedJobs.length}`)
     if (collectedJobs.length === 0) {
+        if (result.jobs.length > 0) noteSourceFailure('Google listings had no verifiable posting dates')
         console.log('⚠️  No jobs found.')
         return
     }
@@ -388,6 +398,10 @@ async function scrapeGoogleJobs() {
     let failed = 0
 
     for (let i = 0; i < collectedJobs.length; i++) {
+        if (Date.now() >= deadline) {
+            noteSourceFailure('Google stopped before the source deadline; job descriptions are incomplete')
+            break
+        }
         const job = collectedJobs[i]
         if (!job.job_url) { failed++; continue }
 
