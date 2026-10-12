@@ -1,14 +1,13 @@
 import { cache } from "react"
 import { notFound } from "next/navigation"
-import { getJobById } from "@/lib/job-data"
+import { getJobDetail } from "@/lib/modules/jobs/repository"
 import { JobDetailContent } from "@/components/job-detail-content"
 
-// Generate pages on-demand (ISR) — no pre-building 7000+ pages at deploy time.
-// Each page is built on first visit and cached for 5 minutes.
-export const revalidate = 300
+// Resolve details on demand so expired postings and source updates are reflected promptly.
+export const revalidate = 0
 export const dynamicParams = true
 
-const getJobByIdCached = cache(getJobById)
+const getJobByIdCached = cache(getJobDetail)
 
 export async function generateMetadata({
   params,

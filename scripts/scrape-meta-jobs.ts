@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Meta Jobs Scraper
  *
@@ -76,7 +77,7 @@ async function runMetaViaGraphQL(baseUrl: string, pages: number, requireDate: bo
             }
         })
 
-        await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
+        await navigateSource(page, baseUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
         await sleep(5000)
 
         if (!capturedResultsRequest) {

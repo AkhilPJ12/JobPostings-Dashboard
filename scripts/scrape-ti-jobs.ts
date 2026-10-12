@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Texas Instruments Jobs Scraper
  *
@@ -5,7 +6,7 @@
  * List page: div.search-results.job-tile.job-list-item cards with MM/DD/YYYY dates
  * Detail page: Full description + qualifications
  *
- * Usage: npx tsx scripts/scrape-ti-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-ti-jobs.ts
  */
 
 import { BrowserContext, chromium } from 'playwright'
@@ -38,7 +39,7 @@ async function fetchTIJobDetail(context: BrowserContext, jobUrl: string): Promis
 }> {
     const page = await context.newPage()
     try {
-        await page.goto(jobUrl, { waitUntil: 'networkidle', timeout: 30000 })
+        await navigateSource(page, jobUrl, { waitUntil: 'networkidle', timeout: 30000 })
         await sleep(randomDelay(800, 1500))
 
         const detail = await page.evaluate(() => {
@@ -101,7 +102,7 @@ async function scrapeTIJobs() {
             console.log(`🔗 Career URL: ${careerUrl}`)
 
             const page = await context.newPage()
-            await page.goto(careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
+            await navigateSource(page, careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
             await sleep(8000)
 
             // Collect all jobs from list page (scroll/paginate)
@@ -114,11 +115,12 @@ async function scrapeTIJobs() {
                 const jobs = await page.evaluate(() => {
                     const cards = Array.from(document.querySelectorAll('div.search-results.job-tile.job-list-item'))
                     return cards.map(card => {
-                        const linkEl = card.querySelector('a[href*=job]') as HTMLAnchorElement | null
+                        const tile = card as HTMLElement
+                        const linkEl = tile.querySelector('a[href*=job]') as HTMLAnchorElement | null
                         const href = linkEl?.href || ''
                         const idMatch = href.match(/\/job\/(\d+)/)
                         const id = idMatch?.[1] || ''
-                        const fullText = card.innerText || card.textContent || ''
+                        const fullText = tile.innerText || tile.textContent || ''
                         // Title is first meaningful line
                         const lines = fullText.split('\n').map(l => l.trim()).filter(Boolean)
                         const title = lines[0] || ''

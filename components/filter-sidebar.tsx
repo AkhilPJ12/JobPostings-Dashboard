@@ -1,13 +1,10 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Search, X, SlidersHorizontal, RotateCcw } from "lucide-react"
+import { useState, useEffect, useMemo } from "react"
+import { Check, Search, X, SlidersHorizontal, RotateCcw } from "lucide-react"
 import { Input } from "@/components/ui/input"
-import {
-  getUniqueCompanies,
-  getUniqueDepartments,
-  getJobCountByCompany,
-} from "@/lib/job-data"
+import type { Job } from "@/lib/job-types"
+import type { JobFacets } from '@/lib/modules/jobs/contracts'
 
 export type Filters = {
   companies: string[]
@@ -15,14 +12,18 @@ export type Filters = {
   departments: string[]
   datePosted: string
   employmentTypes: string[]
+  visaSponsorship: string[]
+  securityClearance: string[]
 }
 
 type FilterSidebarProps = {
   filters: Filters
   onFiltersChange: (filters: Filters) => void
-  activeFilterCount: number
   isOpen: boolean
   onClose: () => void
+  jobs: Job[]
+  resultCount: number
+  facets?: JobFacets
 }
 
 const workTypeConfig: Record<string, { dot: string; text: string; selectedBorder: string; selectedBg: string }> = {
@@ -44,21 +45,64 @@ const workTypeConfig: Record<string, { dot: string; text: string; selectedBorder
     selectedBorder: "border-amber-500",
     selectedBg: "bg-amber-50 dark:bg-amber-950/40",
   },
+  Unknown: { dot: 'bg-muted-foreground', text: 'text-muted-foreground', selectedBorder: 'border-border', selectedBg: 'bg-muted' },
 }
 
 export function FilterSidebar({
   filters,
   onFiltersChange,
-  activeFilterCount,
   isOpen,
   onClose,
+  jobs,
+  resultCount,
+  facets,
 }: FilterSidebarProps) {
   const [localFilters, setLocalFilters] = useState<Filters>(filters)
   const [companySearch, setCompanySearch] = useState("")
   const [visible, setVisible] = useState(false)
-  const [companies, setCompanies] = useState<string[]>([])
-  const [departments, setDepartments] = useState<string[]>([])
-  const [companyCounts, setCompanyCounts] = useState<Record<string, number>>({})
+  const companies = useMemo(
+    () => facets ? facets.companies.map(item => item.value) : [...new Set(jobs.map(job => job.company).filter(Boolean))].sort(),
+    [jobs, facets]
+  )
+  const departments = useMemo(
+    () => facets ? facets.departments.map(item => item.value) : [...new Set(jobs.map(job => job.department).filter(Boolean))].sort(),
+    [jobs, facets]
+  )
+  const companyCounts = useMemo(() => {
+    if (facets) return Object.fromEntries(facets.companies.map(item => [item.value, item.count]))
+    return jobs.reduce<Record<string, number>>((counts, job) => {
+      counts[job.company] = (counts[job.company] || 0) + 1
+      return counts
+    }, {})
+  }, [jobs, facets])
+  const departmentCounts = useMemo(() => {
+    if (facets) return Object.fromEntries(facets.departments.map(item => [item.value, item.count]))
+    return jobs.reduce<Record<string, number>>((counts, job) => {
+      counts[job.department] = (counts[job.department] || 0) + 1
+      return counts
+    }, {})
+  }, [jobs, facets])
+  const employmentCounts = useMemo(() => {
+    if (facets) return Object.fromEntries(facets.employmentTypes.map(item => [item.value, item.count]))
+    return jobs.reduce<Record<string, number>>((counts, job) => {
+      counts[job.type] = (counts[job.type] || 0) + 1
+      return counts
+    }, {})
+  }, [jobs, facets])
+  const visaCounts = useMemo(() => {
+    if (facets) return Object.fromEntries(facets.visaSponsorship.map(item => [item.value, item.count]))
+    return jobs.reduce<Record<string, number>>((counts, job) => {
+      counts[job.visaSponsorship] = (counts[job.visaSponsorship] || 0) + 1
+      return counts
+    }, {})
+  }, [jobs, facets])
+  const clearanceCounts = useMemo(() => {
+    if (facets) return Object.fromEntries(facets.securityClearance.map(item => [item.value, item.count]))
+    return jobs.reduce<Record<string, number>>((counts, job) => {
+      counts[job.securityClearance] = (counts[job.securityClearance] || 0) + 1
+      return counts
+    }, {})
+  }, [jobs, facets])
 
   useEffect(() => {
     if (isOpen) {
@@ -69,29 +113,6 @@ export function FilterSidebar({
       return () => clearTimeout(timer)
     }
   }, [isOpen, filters])
-
-  useEffect(() => {
-    async function fetchFilterData() {
-      try {
-        const [fetchedCompanies, fetchedDepartments] = await Promise.all([
-          getUniqueCompanies(),
-          getUniqueDepartments(),
-        ])
-        setCompanies(fetchedCompanies)
-        setDepartments(fetchedDepartments)
-        const counts: Record<string, number> = {}
-        for (const company of fetchedCompanies) {
-          counts[company] = await getJobCountByCompany(company)
-        }
-        setCompanyCounts(counts)
-      } catch (error) {
-        console.error('Error fetching filter data:', error)
-      }
-    }
-    fetchFilterData()
-  }, [])
-
-  if (!visible && !isOpen) return null
 
   const filteredCompanies = companySearch
     ? companies.filter(c => c.toLowerCase().includes(companySearch.toLowerCase()))
@@ -125,6 +146,20 @@ export function FilterSidebar({
     setLocalFilters({ ...localFilters, employmentTypes: updated })
   }
 
+  const toggleVisaSponsorship = (value: string) => {
+    const updated = localFilters.visaSponsorship.includes(value)
+      ? localFilters.visaSponsorship.filter(v => v !== value)
+      : [...localFilters.visaSponsorship, value]
+    setLocalFilters({ ...localFilters, visaSponsorship: updated })
+  }
+
+  const toggleSecurityClearance = (value: string) => {
+    const updated = localFilters.securityClearance.includes(value)
+      ? localFilters.securityClearance.filter(v => v !== value)
+      : [...localFilters.securityClearance, value]
+    setLocalFilters({ ...localFilters, securityClearance: updated })
+  }
+
   const handleApply = () => {
     onFiltersChange(localFilters)
     onClose()
@@ -137,6 +172,8 @@ export function FilterSidebar({
       departments: [],
       datePosted: "all",
       employmentTypes: [],
+      visaSponsorship: [],
+      securityClearance: [],
     }
     setLocalFilters(reset)
     onFiltersChange(reset)
@@ -147,7 +184,30 @@ export function FilterSidebar({
     localFilters.locationTypes.length +
     localFilters.departments.length +
     localFilters.employmentTypes.length +
+    localFilters.visaSponsorship.length +
+    localFilters.securityClearance.length +
     (localFilters.datePosted !== "all" ? 1 : 0)
+
+  const previewCount = useMemo(() => {
+    if (facets) return resultCount
+    let result = [...jobs]
+    if (localFilters.companies.length > 0) result = result.filter(job => localFilters.companies.includes(job.company))
+    if (localFilters.locationTypes.length > 0) result = result.filter(job => localFilters.locationTypes.includes(job.locationType))
+    if (localFilters.departments.length > 0) result = result.filter(job => localFilters.departments.includes(job.department))
+    if (localFilters.employmentTypes.length > 0) result = result.filter(job => localFilters.employmentTypes.includes(job.type))
+    if (localFilters.visaSponsorship.length > 0) result = result.filter(job => localFilters.visaSponsorship.includes(job.visaSponsorship))
+    if (localFilters.securityClearance.length > 0) result = result.filter(job => localFilters.securityClearance.includes(job.securityClearance))
+    if (localFilters.datePosted !== "all") {
+      const cutoff = new Date()
+      if (localFilters.datePosted === "7days") cutoff.setDate(cutoff.getDate() - 7)
+      else if (localFilters.datePosted === "14days") cutoff.setDate(cutoff.getDate() - 14)
+      const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
+      result = result.filter(job => (job.postedDate || '') >= cutoffStr)
+    }
+    return result.length
+  }, [jobs, localFilters, facets, resultCount])
+
+  if (!visible && !isOpen) return null
 
   return (
     <>
@@ -169,7 +229,7 @@ export function FilterSidebar({
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-border/60">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
               <SlidersHorizontal className="w-4 h-4 text-primary" />
             </div>
             <div>
@@ -184,6 +244,7 @@ export function FilterSidebar({
           <div className="flex items-center gap-2">
             {localActiveCount > 0 && (
               <button
+                type="button"
                 onClick={handleReset}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition-colors text-xs"
               >
@@ -192,8 +253,10 @@ export function FilterSidebar({
               </button>
             )}
             <button
+              type="button"
+              aria-label="Close filters"
               onClick={onClose}
-              className="p-2 hover:bg-muted rounded-xl transition-colors text-muted-foreground hover:text-foreground"
+              className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
               <X className="w-5 h-5" />
             </button>
@@ -207,6 +270,7 @@ export function FilterSidebar({
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium text-foreground">Company</label>
               <button
+                type="button"
                 onClick={() => {
                   const allSelected = companies.every(c => localFilters.companies.includes(c))
                   setLocalFilters({ ...localFilters, companies: allSelected ? [] : [...companies] })
@@ -222,10 +286,12 @@ export function FilterSidebar({
                 placeholder="Search companies..."
                 value={companySearch}
                 onChange={e => setCompanySearch(e.target.value)}
-                className="pl-9 bg-muted/60 border-border/50 rounded-xl h-10"
+                className="pl-9 bg-muted/60 border-border/50 rounded-lg h-10"
               />
               {companySearch && (
                 <button
+                  type="button"
+                  aria-label="Clear company search"
                   onClick={() => setCompanySearch("")}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
@@ -237,7 +303,7 @@ export function FilterSidebar({
               {filteredCompanies.map(company => (
                 <label
                   key={company}
-                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-xl transition-colors group"
+                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-lg transition-colors group"
                 >
                   <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all flex-shrink-0 ${
                     localFilters.companies.includes(company)
@@ -245,9 +311,7 @@ export function FilterSidebar({
                       : "border-border/60 group-hover:border-primary/40"
                   }`}>
                     {localFilters.companies.includes(company) && (
-                      <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
+                      <Check className="w-3 h-3 text-primary-foreground" strokeWidth={3} />
                     )}
                   </div>
                   <input type="checkbox" checked={localFilters.companies.includes(company)} onChange={() => toggleCompany(company)} className="hidden" />
@@ -264,14 +328,15 @@ export function FilterSidebar({
           <div className="space-y-3">
             <label className="text-sm font-medium text-foreground">Work Type</label>
             <div className="grid grid-cols-3 gap-2">
-              {(["Remote", "Hybrid", "Onsite"] as const).map(type => {
+              {(["Remote", "Hybrid", "Onsite", "Unknown"] as const).map(type => {
                 const config = workTypeConfig[type]
                 const isSelected = localFilters.locationTypes.includes(type)
                 return (
                   <button
+                    type="button"
                     key={type}
                     onClick={() => toggleLocationType(type)}
-                    className={`flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all duration-200 ${
+                    className={`flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-all duration-200 ${
                       isSelected
                         ? `${config.selectedBorder} ${config.selectedBg}`
                         : "border-border/50 hover:border-primary/30 hover:bg-muted/40"
@@ -293,15 +358,19 @@ export function FilterSidebar({
                 const isSelected = localFilters.departments.includes(dept)
                 return (
                   <button
+                    type="button"
                     key={dept}
                     onClick={() => toggleDepartment(dept)}
-                    className={`px-3 py-1.5 rounded-full border text-[13px] transition-all duration-200 ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-[13px] transition-all duration-200 ${
                       isSelected
                         ? "bg-primary text-primary-foreground border-primary shadow-sm font-semibold"
                         : "bg-muted/50 text-muted-foreground border-border/50 hover:border-primary/30 hover:text-foreground"
                     }`}
                   >
-                    {dept}
+                    <span>{dept}</span>
+                    <span className={`text-[10px] ${isSelected ? "text-primary-foreground/80" : "text-muted-foreground/70"}`}>
+                      {departmentCounts[dept] || 0}
+                    </span>
                   </button>
                 )
               })}
@@ -316,11 +385,11 @@ export function FilterSidebar({
                 { value: "today", label: "Today" },
                 { value: "7days", label: "Last 7 days" },
                 { value: "14days", label: "Last 14 days" },
-                { value: "all", label: "All time" },
+                { value: "all", label: "Last 14 days" },
               ].map(option => (
                 <label
                   key={option.value}
-                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-xl transition-colors group"
+                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-lg transition-colors group"
                 >
                   <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
                     localFilters.datePosted === option.value ? "border-primary" : "border-border/60 group-hover:border-primary/40"
@@ -351,7 +420,7 @@ export function FilterSidebar({
               {["Full-time", "Part-time", "Contract", "Internship"].map(type => (
                 <label
                   key={type}
-                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-xl transition-colors group"
+                  className="flex items-center gap-3 cursor-pointer hover:bg-muted/60 p-2.5 rounded-lg transition-colors group"
                 >
                   <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all flex-shrink-0 ${
                     localFilters.employmentTypes.includes(type)
@@ -359,35 +428,96 @@ export function FilterSidebar({
                       : "border-border/60 group-hover:border-primary/40"
                   }`}>
                     {localFilters.employmentTypes.includes(type) && (
-                      <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
+                      <Check className="w-3 h-3 text-primary-foreground" strokeWidth={3} />
                     )}
                   </div>
                   <input type="checkbox" checked={localFilters.employmentTypes.includes(type)} onChange={() => toggleEmploymentType(type)} className="hidden" />
                   <span className={`text-sm ${localFilters.employmentTypes.includes(type) ? "text-foreground font-medium" : "text-muted-foreground"}`}>
                     {type}
                   </span>
+                  <span className="ml-auto text-xs font-semibold text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                    {employmentCounts[type] || 0}
+                  </span>
                 </label>
               ))}
+            </div>
+          </div>
+
+          {/* Visa Sponsorship */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground">Visa Sponsorship</label>
+            <div className="grid grid-cols-3 gap-2">
+              {["Yes", "No", "N/A"].map(value => {
+                const isSelected = localFilters.visaSponsorship.includes(value)
+                return (
+                  <button
+                    type="button"
+                    key={value}
+                    onClick={() => toggleVisaSponsorship(value)}
+                    className={`rounded-md border px-3 py-2 text-sm transition-colors ${
+                      isSelected
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border/60 bg-muted/40 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {value}
+                    <span className={`ml-1 text-[10px] ${isSelected ? "text-primary-foreground/80" : "text-muted-foreground/70"}`}>
+                      {visaCounts[value] || 0}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Security Clearance */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground">Security Clearance</label>
+            <div className="grid grid-cols-3 gap-2">
+              {["Yes", "No", "N/A"].map(value => {
+                const isSelected = localFilters.securityClearance.includes(value)
+                return (
+                  <button
+                    type="button"
+                    key={value}
+                    onClick={() => toggleSecurityClearance(value)}
+                    className={`rounded-md border px-3 py-2 text-sm transition-colors ${
+                      isSelected
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border/60 bg-muted/40 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {value}
+                    <span className={`ml-1 text-[10px] ${isSelected ? "text-primary-foreground/80" : "text-muted-foreground/70"}`}>
+                      {clearanceCounts[value] || 0}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           </div>
         </div>
 
         {/* Footer */}
         <div className="p-6 border-t border-border/60 bg-card">
+          <p className="mb-3 text-center text-xs text-muted-foreground">
+            {facets ? `${resultCount.toLocaleString()} current results · update after applying filters` : `${previewCount.toLocaleString()} matching jobs before search text`}
+            {!facets && resultCount !== previewCount && ` · ${resultCount.toLocaleString()} currently visible`}
+          </p>
           <div className="flex gap-3">
             <button
+              type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-3 border border-border/60 rounded-xl hover:bg-muted transition-colors text-foreground text-sm font-medium"
+              className="flex-1 px-4 py-3 border border-border/60 rounded-lg hover:bg-muted transition-colors text-foreground text-sm font-medium"
             >
               Cancel
             </button>
             <button
+              type="button"
               onClick={handleApply}
-              className="flex-1 px-4 py-3 bg-gradient-to-r from-indigo-500 to-violet-500 text-white rounded-xl hover:from-indigo-600 hover:to-violet-600 transition-all duration-200 shadow-lg shadow-indigo-500/20 text-sm font-medium"
+              className="flex-1 px-4 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
             >
-              Apply{localActiveCount > 0 ? ` (${localActiveCount})` : ""}
+              {facets ? 'Apply filters' : `Apply (${previewCount.toLocaleString()} results)`}
             </button>
           </div>
         </div>

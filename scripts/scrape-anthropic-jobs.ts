@@ -1,3 +1,4 @@
+import { fetchSource } from '../lib/modules/ingestion/http'
 /**
  * Anthropic Jobs Scraper
  *
@@ -5,7 +6,7 @@
  * Board token: anthropic
  * Has `first_published` for posting date and full HTML content.
  *
- * Usage: npx tsx scripts/scrape-anthropic-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-anthropic-jobs.ts
  */
 
 import {
@@ -45,8 +46,8 @@ async function scrapeAnthropicJobs() {
     const apiUrl = `https://boards-api.greenhouse.io/v1/boards/${CONFIG.boardToken}/jobs?content=true`
     console.log(`🔗 API URL: ${apiUrl}`)
 
-    const resp = await fetch(apiUrl)
-    if (!resp.ok) { console.error(`❌ API error: ${resp.status}`); return }
+    const resp = await fetchSource(apiUrl)
+    if (!resp.ok) throw new Error(`API error: ${resp.status}`)
 
     const data = await resp.json() as { jobs: GreenhouseJob[] }
     console.log(`📊 Total jobs from API: ${data.jobs?.length || 0}`)
@@ -91,6 +92,7 @@ async function scrapeAnthropicJobs() {
             pay_range: truncateField(extractPayRange(fullText)),
             security_clearance: detectSecurityClearance(fullText),
             h1b_sponsorship: detectH1BSponsorship(fullText),
+            structuredSourceFields: { department: j.departments?.[0]?.name || null },
             job_url: j.absolute_url || `https://job-boards.greenhouse.io/anthropic/jobs/${j.id}`,
             is_active: true,
         })

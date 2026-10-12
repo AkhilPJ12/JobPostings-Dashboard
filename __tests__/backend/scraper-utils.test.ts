@@ -68,7 +68,7 @@ describe('Scraper Utils', () => {
         it('determines location type from text', () => {
             expect(determineLocationType('Remote - US')).toBe('Remote')
             expect(determineLocationType('NYC', 'Hybrid schedule')).toBe('Hybrid')
-            expect(determineLocationType('San Jose, CA')).toBe('Onsite')
+            expect(determineLocationType('San Jose, CA')).toBeNull()
         })
     })
 
@@ -116,7 +116,7 @@ describe('Scraper Utils', () => {
             expect(determineEmploymentType('Software Engineering Intern')).toBe('Internship')
             expect(determineEmploymentType('Contract Data Analyst')).toBe('Contract')
             expect(determineEmploymentType('Part-time Support Specialist')).toBe('Part-time')
-            expect(determineEmploymentType('Senior Backend Engineer')).toBe('Full-time')
+            expect(determineEmploymentType('Senior Backend Engineer')).toBeNull()
         })
     })
 

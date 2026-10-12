@@ -38,7 +38,15 @@
       "Bash(grep -r \"TODO\\\\|FIXME\\\\|BUG\\\\|XXX\" /Users/akhil/Desktop/Projects/JobPostings-Dashboard/scripts --include=*.ts)",
       "mcp__claude_ai_Figma__whoami",
       "mcp__claude_ai_Figma__get_metadata",
-      "mcp__claude_ai_Figma__get_design_context"
+      "mcp__claude_ai_Figma__get_design_context",
+      "Bash(pnpm install:*)",
+      "Bash(npx pnpm:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh run:*)",
+      "Bash(git config:*)",
+      "Bash(grep -n \"careers_url\" /Users/akhil/Desktop/Projects/JobPostings-Dashboard/scripts/*.ts)"
     ]
   }
 }

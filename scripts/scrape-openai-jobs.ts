@@ -1,3 +1,4 @@
+import { fetchSource } from '../lib/modules/ingestion/http'
 /**
  * OpenAI Jobs Scraper
  *
@@ -5,7 +6,7 @@
  * API: https://api.ashbyhq.com/posting-api/job-board/openai
  * Has `publishedAt` for posting date and full description.
  *
- * Usage: npx tsx scripts/scrape-openai-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-openai-jobs.ts
  */
 
 import {
@@ -49,8 +50,8 @@ async function scrapeOpenAIJobs() {
     const apiUrl = 'https://api.ashbyhq.com/posting-api/job-board/openai'
     console.log(`🔗 API URL: ${apiUrl}`)
 
-    const resp = await fetch(apiUrl)
-    if (!resp.ok) { console.error(`❌ API error: ${resp.status}`); return }
+    const resp = await fetchSource(apiUrl)
+    if (!resp.ok) throw new Error(`API error: ${resp.status}`)
 
     const data = await resp.json() as { jobs: AshbyJob[] }
     console.log(`📊 Total jobs from API: ${data.jobs?.length || 0}`)
@@ -94,6 +95,15 @@ async function scrapeOpenAIJobs() {
             pay_range: truncateField(extractPayRange(fullText)),
             security_clearance: detectSecurityClearance(fullText),
             h1b_sponsorship: detectH1BSponsorship(fullText),
+            structuredSourceFields: {
+                department: j.department || j.team || null,
+                location_type: j.isRemote ? 'Remote' :
+                    j.workplaceType === 'Remote' || j.workplaceType === 'Hybrid' || j.workplaceType === 'Onsite'
+                        ? j.workplaceType : null,
+                employment_type: j.employmentType === 'Full-time' || j.employmentType === 'Part-time' ||
+                    j.employmentType === 'Contract' || j.employmentType === 'Internship' ? j.employmentType : null,
+            },
+            sourceHints: { employmentType: j.employmentType || '', workplaceType: j.workplaceType || '' },
             job_url: j.jobUrl || j.applyUrl || `https://openai.com/careers/`,
             is_active: true,
         })

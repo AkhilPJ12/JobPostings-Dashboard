@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Goldman Sachs Jobs Scraper
  *
@@ -5,7 +6,7 @@
  * No posted dates available — uses first-seen date pattern.
  * Detail pages at higher.gs.com/roles/{sourceId} have salary but no date.
  *
- * Usage: npx tsx scripts/scrape-goldmansachs-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-goldmansachs-jobs.ts
  */
 
 import { chromium } from 'playwright'
@@ -91,7 +92,7 @@ async function scrapeGoldmanSachsJobs() {
     try {
     // Load the page first to get cookies/session
     const page = await context.newPage()
-    await page.goto('https://higher.gs.com/results?JOB_FUNCTION=Software+Engineering&page=1&sort=POSTED_DATE', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await navigateSource(page, 'https://higher.gs.com/results?JOB_FUNCTION=Software+Engineering&page=1&sort=POSTED_DATE', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await sleep(5000)
 
     const today = new Date().toISOString().split('T')[0]
@@ -161,8 +162,9 @@ async function scrapeGoldmanSachsJobs() {
                     required_qualifications: [],
                     preferred_qualifications: [],
                     pay_range: '',
-                    security_clearance: 'No',
+                    security_clearance: 'N/A',
                     h1b_sponsorship: 'N/A',
+                    structuredSourceFields: { department: role.division || null },
                     job_url: `https://higher.gs.com/roles/${sourceId}`,
                     is_active: true,
                 }

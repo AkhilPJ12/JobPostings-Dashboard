@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Salesforce Jobs Scraper
  *
@@ -80,7 +81,7 @@ async function runSalesforceUrl(baseUrl: string, pages: number, requireDate: boo
             const pageUrl = `${baseUrl.replace(/#results$/, '')}&page=${pageNum}#results`
             console.log(`📄 Page ${pageNum}...`)
 
-            await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+            await navigateSource(page, pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
             await sleep(1800)
             await page.waitForSelector('.card.card-job', { timeout: 10000 }).catch(() => { })
 
@@ -188,6 +189,7 @@ async function scrapeSalesforceJobs() {
             pay_range: extractPayRange(detailDescription),
             security_clearance: detectSecurityClearance(detailDescription),
             h1b_sponsorship: detectH1BSponsorship(detailDescription),
+            structuredSourceFields: { department: j.department || null },
             job_url: j.url || sourceUrl,
             is_active: true,
         }

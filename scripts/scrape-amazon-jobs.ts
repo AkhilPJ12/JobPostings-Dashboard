@@ -1,3 +1,4 @@
+import { fetchSource } from '../lib/modules/ingestion/http'
 /**
  * Amazon Jobs Scraper
  * 
@@ -10,16 +11,10 @@
  * 
  * Stores results directly in Supabase database with external_job_id for deduplication.
  * 
- * Usage: npx tsx scripts/scrape-amazon-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-amazon-jobs.ts
  */
 
-import { createClient } from '@supabase/supabase-js'
-import * as dotenv from 'dotenv'
-import { resolve } from 'path'
-import { withScraperRun, normalizeDepartment } from './scraper-utils'
-
-// Load environment variables
-dotenv.config({ path: resolve(process.cwd(), '.env.local') })
+import { withScraperRun, normalizeDepartment, supabase, upsertJobsBatch, determineEmploymentType } from './scraper-utils'
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -58,12 +53,13 @@ const SECURITY_CLEARANCE_PATTERNS = [
     /\bSensitive\s+Compartmented\s+Information\b/i,
 ]
 
-function detectSecurityClearance(text: string): 'Yes' | 'No' {
-    if (!text) return 'No'
+function detectSecurityClearance(text: string): 'Yes' | 'No' | 'N/A' {
+    if (!text) return 'N/A'
+    if (/(?:no|not|without).{0,25}(?:security )?clearance/i.test(text)) return 'No'
     for (const pattern of SECURITY_CLEARANCE_PATTERNS) {
         if (pattern.test(text)) return 'Yes'
     }
-    return 'No'
+    return 'N/A'
 }
 
 // ─── H1B Sponsorship Detection ───────────────────────────────────────────────
@@ -112,19 +108,6 @@ const HEADERS: Record<string, string> = {
     'Sec-CH-UA-Platform': '"macOS"',
 }
 
-// ─── Supabase Setup ──────────────────────────────────────────────────────────
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-
-if (!supabaseUrl || !supabaseAnonKey) {
-    console.error('❌ Missing Supabase environment variables')
-    console.error('Make sure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are set in .env.local')
-    process.exit(1)
-}
-
-const supabase = createClient(supabaseUrl, supabaseAnonKey)
-
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface AmazonJob {
@@ -161,9 +144,9 @@ interface DbJob {
     external_job_id: string
     title: string
     location: string
-    location_type: 'Remote' | 'Hybrid' | 'Onsite'
+    location_type: 'Remote' | 'Hybrid' | 'Onsite' | null
     department: string
-    employment_type: 'Full-time' | 'Part-time' | 'Contract' | 'Internship'
+    employment_type: 'Full-time' | 'Part-time' | 'Contract' | 'Internship' | null
     posted_date: string
     description: string
     summary: string
@@ -174,6 +157,12 @@ interface DbJob {
     h1b_sponsorship: 'Yes' | 'No' | 'N/A'
     job_url: string
     is_active: boolean
+    structuredSourceFields?: {
+        department?: string | null
+        required_qualifications?: string[]
+        preferred_qualifications?: string[]
+    }
+    sourceHints?: Record<string, string>
 }
 
 interface CompanyRecord {
@@ -276,7 +265,7 @@ function isWithinDays(dateStr: string | null, days: number): boolean {
 /**
  * Determine location type from job data
  */
-function determineLocationType(job: AmazonJob): 'Remote' | 'Hybrid' | 'Onsite' {
+function determineLocationType(job: AmazonJob): 'Remote' | 'Hybrid' | 'Onsite' | null {
     const title = job.title.toLowerCase()
     const location = (job.location || '').toLowerCase()
     const city = (job.city || '').toLowerCase()
@@ -287,7 +276,7 @@ function determineLocationType(job: AmazonJob): 'Remote' | 'Hybrid' | 'Onsite' {
     if (title.includes('hybrid')) {
         return 'Hybrid'
     }
-    return 'Onsite'
+    return /on[- ]?site|in[- ]?office/i.test(`${job.title} ${job.description}`) ? 'Onsite' : null
 }
 
 /**
@@ -340,7 +329,7 @@ async function fetchPage(baseUrl: string, params: URLSearchParams, offset: numbe
         'Referer': `${refererUrl.protocol}//${refererUrl.host}/en/search`,
     }
 
-    const response = await fetch(url, { headers })
+    const response = await fetchSource(url, { headers })
 
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -375,32 +364,6 @@ async function getCompany(): Promise<CompanyRecord> {
 
 
 
-/**
- * Insert jobs in batches, using upsert with external_job_id for deduplication
- */
-async function upsertJobsBatch(jobs: DbJob[]): Promise<number> {
-    let upserted = 0
-
-    for (let i = 0; i < jobs.length; i += CONFIG.batchSize) {
-        const batch = jobs.slice(i, i + CONFIG.batchSize)
-        const { data, error } = await supabase
-            .from('jobs')
-            .upsert(batch, { onConflict: 'external_job_id' })
-            .select('id')
-
-        if (error) {
-            console.error(`❌ Error upserting batch ${Math.floor(i / CONFIG.batchSize) + 1}:`, error)
-            continue
-        }
-
-        upserted += data?.length || 0
-        const progress = Math.min(i + CONFIG.batchSize, jobs.length)
-        console.log(`   📦 Batch ${Math.floor(i / CONFIG.batchSize) + 1}: ${data?.length || 0} upserted (${progress}/${jobs.length})`)
-    }
-
-    return upserted
-}
-
 // ─── Job Processing ──────────────────────────────────────────────────────────
 
 function processJobForDb(job: AmazonJob, companyId: number): DbJob {
@@ -414,7 +377,7 @@ function processJobForDb(job: AmazonJob, companyId: number): DbJob {
         location: job.normalized_location || job.location || 'Not specified',
         location_type: determineLocationType(job),
         department: normalizeDepartment(job.job_category || 'General', job.title.trim()),
-        employment_type: 'Full-time',
+        employment_type: determineEmploymentType(`${job.job_schedule_type} ${job.title}`),
         posted_date: postedDate || new Date().toISOString().split('T')[0],
         description: cleanHtml(job.description),
         summary: createSummary(job.description),
@@ -423,6 +386,12 @@ function processJobForDb(job: AmazonJob, companyId: number): DbJob {
         pay_range: extractPayRange(fullText),
         security_clearance: detectSecurityClearance(fullText),
         h1b_sponsorship: detectH1BSponsorship(fullText),
+        structuredSourceFields: {
+            department: job.job_category || null,
+            required_qualifications: parseQualifications(job.basic_qualifications),
+            preferred_qualifications: parseQualifications(job.preferred_qualifications),
+        },
+        sourceHints: { scheduleType: job.job_schedule_type || '' },
         job_url: `https://amazon.jobs${job.job_path}`,
         is_active: true,
     }

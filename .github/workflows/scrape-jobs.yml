@@ -2,50 +2,63 @@ name: Scrape Jobs
 
 on:
   schedule:
-    - cron: '0 13 * * *'    # 7 AM CST (13:00 UTC)
-    - cron: '0 20 * * *'    # 2 PM CST (20:00 UTC)
-  workflow_dispatch:          # allow manual trigger from GitHub UI
+    - cron: '0 13 * * *'
+    - cron: '0 20 * * *'
+  workflow_dispatch:
 
 jobs:
-  # Fast job: API-only scrapers — no Playwright needed (~2 min)
-  scrape-api:
+  maintenance:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
       - uses: pnpm/action-setup@v3
         with:
-          version: 8
-      - run: pnpm install
-
-      - name: Run API scrapers (parallel)
+          version: 9.15.9
+      - run: pnpm install --frozen-lockfile
+      - name: Apply lifecycle rules once
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-        run: npx tsx scripts/scrape-all-jobs.ts --api-only
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: pnpm exec tsx scripts/scrape-all-jobs.ts --maintenance-only
 
-  # Slow job: Browser scrapers — needs Playwright (~40 min)
-  scrape-browser:
+  scrape:
+    needs: maintenance
     runs-on: ubuntu-latest
     timeout-minutes: 90
-
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        kind: [api, browser]
+        batch: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: scripts/requirements-scraping.txt
       - uses: pnpm/action-setup@v3
         with:
-          version: 8
-      - run: pnpm install
-      - run: pnpm exec playwright install chromium --with-deps
-
-      - name: Run browser scrapers (sequential)
+          version: 9.15.9
+      - run: pnpm install --frozen-lockfile
+      - run: python -m pip install -r scripts/requirements-scraping.txt
+      - if: matrix.kind == 'browser'
+        run: pnpm exec playwright install chromium --with-deps
+      - if: matrix.kind == 'browser'
+        run: scrapling install
+      - name: Run source batch
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-        run: npx tsx scripts/scrape-all-jobs.ts --browser-only
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SCRAPING_FALLBACK: scrapling
+          SCRAPLING_PYTHON: python
+          SCRAPLING_BROWSER_READY: ${{ matrix.kind == 'browser' && 'true' || 'false' }}
+        run: pnpm exec tsx scripts/scrape-all-jobs.ts --${{ matrix.kind }}-only --batch ${{ matrix.batch }}

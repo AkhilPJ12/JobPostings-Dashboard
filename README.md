@@ -1,160 +1,80 @@
 # JobPostings Dashboard
 
-A Next.js + Supabase job aggregation dashboard with company-specific scrapers.
-
-This project has two core parts:
-- Web app to browse/filter job postings.
-- Scraper pipeline that fetches jobs from company career sites/APIs and upserts into DB.
-
-## Documentation Index
-
-- [Scrapers Technical Guide](./docs/scrapers.md)
-- [Project Change Logs](./docs/logs.md)
+A Next.js and Supabase dashboard that collects recent public job postings from 26 companies. The dashboard reads paged public projections. Company scrapers save source data; a separate Ollama Cloud worker may add validated summaries and extracted facts.
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-  A[Company Career Sites / APIs] --> B[Company Scrapers in scripts/]
-  B --> C[scraper-utils.ts\nnormalization + filtering + upsert]
-  C --> D[(Supabase: jobs, companies)]
-  B --> E[scrape-all-jobs.ts]
-  E --> F[(Supabase: scraper_runs)]
-  D --> G[Next.js app\napp/page.tsx]
-  F --> G
+flowchart LR
+  Sources[Career sites and APIs] --> Scrapers[Source registry and scraper adapters]
+  Scrapers --> Jobs[(Source jobs and identities)]
+  Scrapers --> Runs[(Run history and leases)]
+  Jobs --> Queue[(Enrichment queue)]
+  Queue --> Worker[Ollama Cloud worker]
+  Worker --> AI[(Separate AI results)]
+  Jobs --> RPC[Curated read functions]
+  AI --> RPC
+  Runs --> RPC
+  RPC --> Web[Next.js dashboard]
 ```
 
-## Tech Stack
+The ingestion contract and source normalization live under `lib/modules/ingestion`. Search contracts and database reads live under `lib/modules/jobs`. The Ollama adapter and queue worker live under `lib/modules/enrichment`. Existing source-specific parsers remain in `scripts/` behind the shared runner and upsert path.
 
-- Next.js 16 (App Router)
-- React 19
-- TypeScript
-- Tailwind CSS + Radix UI
-- Supabase (Postgres + JS client)
-- Playwright (browser-driven scrapers)
-- `tsx` (run TS scripts directly)
+## Web App Features
 
-## Repository Structure
+- Compact job-search command area with result count, sort, quick filters, and `Grid` / `List` browsing modes.
+- Filters for company, work type, department, date posted, employment type, visa sponsorship, and security clearance.
+- Job cards and list rows expose separate `Details` and `Apply` actions plus compact pay, visa, and clearance signals when available.
+- Job detail pages include a desktop sticky summary/sidebar and a mobile sticky apply action.
+- Scraper status view supports company search, status chips, zero-job filtering, and sorting by status, last run, jobs, duration, or company.
 
-```text
-app/
-  page.tsx                     # Dashboard entry
-  jobs/[id]/page.tsx           # Job detail
-components/
-  job-dashboard.tsx            # Jobs + Status views
-  scraper-status-table.tsx     # Scraper status table
-lib/
-  job-data.ts                  # Frontend data access
-  supabase.ts                  # Supabase client + DB types
-scripts/
-  scrape-all-jobs.ts           # Master runner
-  scrape-*.ts                  # Company scrapers
-  scraper-utils.ts             # Shared scraper helpers
-scripts/sql/
-  create-scraper-runs.sql      # SQL for scraper status table
-```
+## Setup and database migration
 
-## Database Model
+Use Node 20 and pnpm 9. Run `pnpm install --frozen-lockfile`, then copy `.env.example` to `.env.local` and fill in the Supabase credentials. The anon key is for curated reads; keep the service role key and `OLLAMA_API_KEY` on the server or in GitHub Actions secrets.
 
-Primary tables used by app/scrapers:
-- `companies`
-- `jobs`
-- `scraper_runs`
+Apply the existing `scripts/sql/create-scraper-runs.sql` and `scripts/sql/ai-enrichment.sql` first if they have not already been applied. Then apply `scripts/sql/2026-10-10-architecture.sql` and `scripts/sql/2026-10-11-source-provenance.sql` in order. They add source identity and date provenance, restore recoverable source fields from old snapshots, add separate AI results and a durable queue, change run status to history, and install the public read functions. The latest migration hides historical code-inferred categories and facts unless a scraper marks a field as an explicit structured source value. Review the migrations against the actual Supabase schema before running them on production; they revoke direct anon/authenticated access to source and operations tables. The legacy `raw_job_payload` contains a normalized scraper snapshot, not the original HTTP response.
 
-`jobs` stores normalized postings with unique `external_job_id` per source job.
+The checked-in `lib/supabase.ts` types describe the expected database shape. After applying the migrations to staging, generate authoritative types with `npx supabase gen types typescript --db-url "$SUPABASE_DB_URL" > lib/database.generated.ts` and reconcile the compatibility types. The original `companies`/`jobs` table DDL is not versioned in this repository, so offline type generation cannot verify those base tables.
 
-`scraper_runs` stores latest scraper execution state per company:
-- `company_name`
-- `status` (`Successful` | `Error` | `Partial`)
-- `started_at`
-- `completed_at`
-- `duration_seconds`
-- `error_message`
-- `run_group_id`
-
-Important behavior:
-- `scrape-all-jobs.ts` uses `upsert(..., { onConflict: 'company_name' })`.
-- This means one row per company in `scraper_runs`, updated on rerun.
-
-## Prerequisites
-
-- Node.js 18+
-- npm (or pnpm/yarn; commands below use npm)
-- Supabase project with required tables
-
-## Environment Variables
-
-Create `.env.local` in repo root:
+## Run and operate
 
 ```bash
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+pnpm dev
+pnpm exec tsx scripts/scrape-all-jobs.ts --maintenance-only
+pnpm exec tsx scripts/scrape-all-jobs.ts --api-only --batch 0
+pnpm exec tsx scripts/scrape-all-jobs.ts --browser-only --batch 0
+pnpm exec tsx scripts/scrape-all-jobs.ts amazon
+pnpm enrich:ai -- --limit 25 --dry-run
+pnpm enrich:ai -- --limit 200
+pnpm typecheck
+pnpm test:unit
+pnpm build
 ```
 
-These are required by app and scrapers.
+On a disposable local PostgreSQL database, run `TEST_DATABASE_URL=postgresql://... bash scripts/test-db-contracts.sh` to execute the migrations and concurrency checks. On staging, run `pnpm exec tsx scripts/benchmark-search.ts` after loading 100,000 visible jobs. Run `pnpm exec tsx scripts/evaluate-ai.ts annotated-postings.json` with at least 50 human-annotated public postings before enabling the cloud workflow.
 
-## Setup
+The scrape workflow runs lifecycle maintenance once, then eight source partitions with at most four jobs at a time. A source lease prevents overlapping runs. The enrichment workflow checks the GitHub repository variable `AI_ENRICHMENT_ENABLED`; leave it unset or `false` until the accuracy review passes. When enabled, it runs every four hours using `OLLAMA_API_KEY` from GitHub secrets and defaults to `gemma4:31b` from `OLLAMA_MODEL`.
 
-```bash
-npm install
-```
+Scrapers detect HTTP 403/429 and common challenge pages as source blocks. The default free fallback uses [Scrapling](https://github.com/D4Vinci/Scrapling): its HTTP fetcher tries blocked public GETs first, then its stealth browser fetcher tries blocked HTML pages. GitHub Actions installs it in the scraper workers. For local runs, install it with `python3 -m pip install -r scripts/requirements-scraping.txt`, run `scrapling install` for bundled browser support, and set `SCRAPLING_BROWSER_READY=true` when using the browser fallback for Node GETs. On a Mac with an installed Google Chrome, `SCRAPLING_REAL_CHROME=true` can use that browser instead. No paid scraping API is called in the default configuration.
 
-## Create Scraper Status Table
+`SCRAPING_FALLBACK=none` disables fallback. The paid [ScrapingBee API](https://www.scrapingbee.com/documentation/) remains available only with `SCRAPING_FALLBACK=scrapingbee` and `SCRAPINGBEE_API_KEY`; its signup credits are a trial, not a permanent free tier. Any fallback can still fail on sites that require interactive sessions or block the runner IP. Such blocks appear as errors or partial runs. A completed fetch with zero eligible postings remains successful.
 
-Run this SQL once in Supabase SQL Editor:
+The worker has a 200-job run cap, an eight request/minute pace, and a 1,200 request/day application cap in UTC. Format repair and retries consume quota. Failed enrichment does not hide source postings. Change the model by updating `ai_enrichment_settings` and enqueueing desired source hashes for the new model before changing `OLLAMA_MODEL`; otherwise the new worker will find no matching queue entries.
 
-- `scripts/sql/create-scraper-runs.sql`
+## Data rules
 
-It creates table + indexes + unique index on `company_name`.
+- The public browse window is the last 14 calendar days. Future dates and expired postings are excluded.
+- Date provenance distinguishes source posting dates, first-seen dates, and unverified legacy dates. First-seen identities remain after content is purged at 180 days.
+- Unknown pay, sponsorship, clearance, work arrangement, or employment type appears as “Unknown.” AI facts require source excerpts; source descriptions and titles remain unchanged.
+- Scraper guesses from legacy helper functions are discarded at the normalization boundary and are absent from the AI input. Only explicitly mapped company fields are stored as structured source facts; Ollama classifies every other factual field, including pay, sponsorship, and clearance. The public view lets structured source facts override AI and hides unproven historical categories.
+- The dashboard queries one 20-job page by default, with a maximum of 100, and uses URL parameters for search and filters. The Status tab loads operational aggregates on demand.
+- `scripts/sql/2026-10-10-architecture.sql` owns queue claims and result publication so a stale model response cannot overwrite a changed source posting.
 
-## Run the Web App
+## Validation before enabling cloud enrichment
 
-Development:
+Use an annotated set of at least 50 representative postings and adversarial cases. Require zero unsupported accepted pay, sponsorship, or clearance claims, at least 95% precision for factual extractions, and at least 90% coverage of explicitly stated target fields. Keep `AI_ENRICHMENT_ENABLED=false` until these checks pass. The repository's automated tests use mocked cloud responses and a disposable local PostgreSQL database; the 100,000-job benchmark and cloud evaluation still require staging data and an Ollama key.
 
-```bash
-npm run dev
-```
-
-Open `http://localhost:3000`.
-
-Production build:
-
-```bash
-npm run build
-npm run start
-```
-
-## Run Scrapers
-
-### Run all scrapers (recommended)
-
-```bash
-npx tsx scripts/scrape-all-jobs.ts
-```
-
-This:
-- runs all company scrapers sequentially,
-- upserts jobs into `jobs`,
-- updates each company row in `scraper_runs`.
-
-### Run one scraper from master runner
-
-```bash
-npx tsx scripts/scrape-all-jobs.ts microsoft
-npx tsx scripts/scrape-all-jobs.ts amazon
-```
-
-### Run individual scraper directly
-
-```bash
-npx tsx scripts/scrape-amazon-jobs.ts
-npx tsx scripts/scrape-google-jobs.ts
-npx tsx scripts/scrape-deloitte-jobs.ts
-```
-
-Note:
-- Individual scraper scripts update `jobs`.
-- `scraper_runs` is updated by `scrape-all-jobs.ts` (master runner).
+The evaluation file is a JSON array of `{ "source": { ...normalized scraper fields... }, "expected": { ... } }`. Each `expected` object has nullable strings for `payRange`, `h1bSponsorship`, `securityClearance`, `locationType`, `employmentType`, and `department`, plus string arrays for `requiredQualifications` and `preferredQualifications`. Use `null` only when the original posting does not explicitly state the fact.
 
 ## Supported Companies (26)
 
@@ -186,90 +106,3 @@ Note:
 | Wipro | `scrape-wipro-jobs.ts` | Detail page |
 | Anthropic | `scrape-anthropic-jobs.ts` | Greenhouse API |
 | OpenAI | `scrape-openai-jobs.ts` | Ashby API |
-
-## Scraper Rules
-
-- Prefer postings with valid `posted_date` (last 14 days).
-- Companies without dates (Meta, Intuit, Infosys, Goldman Sachs) use "first-seen date" pattern: today's date for new jobs, preserved on re-runs via `preservePostedDate`.
-- Jobs older than 14 days are soft-deleted (`is_active = false`) by `cleanupOldJobs(14)`.
-- Inactive jobs are permanently purged after 180 days by `purgeInactiveJobs(180)`.
-- Soft-delete prevents zombie re-insertion for no-date companies — `preservePostedDate` checks inactive rows to restore original dates.
-- All scrapers upsert by deterministic external IDs to prevent duplicate jobs.
-- Shared utilities in `scraper-utils.ts`: `truncateField`, `parseSlashDate`, `parseDayMonthYear`, `parseRelativePostedDate`, `launchBrowser`.
-
-## Status View in UI
-
-Top bar has:
-- `Jobs`
-- `Status`
-
-`Status` shows per company:
-- Company Name
-- Last Scraped
-- Status
-- Duration
-
-Data source is `scraper_runs`.
-
-## Useful Operational Commands
-
-Test Supabase connectivity:
-
-```bash
-npx tsx scripts/test-supabase.ts
-```
-
-Run tests:
-
-```bash
-npm test
-npm run test:watch
-npm run test:coverage
-```
-
-Lint:
-
-```bash
-npm run lint
-```
-
-## End-to-End Data Flow
-
-```mermaid
-sequenceDiagram
-  participant R as Runner (scrape-all-jobs.ts)
-  participant S as Company Scraper
-  participant U as scraper-utils
-  participant DB as Supabase
-  participant UI as Next.js Dashboard
-
-  R->>S: Execute scraper script
-  S->>U: Normalize/filter records
-  U->>DB: Upsert into jobs
-  R->>DB: Upsert company run status into scraper_runs
-  UI->>DB: Read jobs + companies + scraper_runs
-  DB-->>UI: Render Jobs and Status tabs
-```
-
-## Troubleshooting
-
-- `Missing Supabase environment variables`:
-- Ensure `.env.local` exists with both required keys.
-
-- Scraper completes but no jobs inserted:
-- Check `companies` table URL fields (`careers_url`, `careers_url_1`, etc.)
-- Confirm filters/date window are not excluding all jobs.
-
-- Status tab shows `Not Run`:
-- Run master runner (`npx tsx scripts/scrape-all-jobs.ts`) at least once.
-- Confirm `scraper_runs` table and unique index were created.
-
-- Company status not updating on rerun:
-- Verify unique index exists on `scraper_runs(company_name)`.
-
-## Notes for Contributors
-
-- Prefer using shared helpers in `scripts/scraper-utils.ts`.
-- Keep external IDs stable for dedupe safety.
-- Preserve fallback behavior around missing posting dates.
-- For new companies, add scraper + company record + include in `SCRAPERS` list in `scripts/scrape-all-jobs.ts`.

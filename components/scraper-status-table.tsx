@@ -1,14 +1,17 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import Image from "next/image"
 import {
   CheckCircle2, XCircle, AlertTriangle, Clock, MinusCircle,
-  Activity, ChevronDown, ChevronUp, Timer, Zap,
+  Activity, ChevronDown, ChevronUp, Timer, Zap, Search,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import type { ScraperStatus } from "@/lib/job-data"
+import type { ScraperStatus } from "@/lib/job-types"
 import { cn } from "@/lib/utils"
+
+type StatusFilter = "all" | ScraperStatus["status"] | "zero-jobs"
+type StatusSort = "status" | "last-run" | "jobs" | "duration" | "company"
 
 function formatLastScraped(date: Date | null): string {
   if (!date) return "Never"
@@ -174,10 +177,14 @@ function StatusRow({ row }: { row: ScraperStatus }) {
 }
 
 export function ScraperStatusTable({ statuses }: { statuses: ScraperStatus[] }) {
+  const [query, setQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
+  const [sortBy, setSortBy] = useState<StatusSort>("status")
   const successCount = statuses.filter((s) => s.status === "Successful").length
   const errorCount = statuses.filter((s) => s.status === "Error").length
   const partialCount = statuses.filter((s) => s.status === "Partial").length
   const notRunCount = statuses.filter((s) => s.status === "Not Run").length
+  const zeroJobCount = statuses.filter((s) => s.status === "Successful" && s.totalJobs === 0).length
   const ranCount = statuses.length - notRunCount
 
   // Calculate total duration across all successful/partial runs
@@ -188,20 +195,47 @@ export function ScraperStatusTable({ statuses }: { statuses: ScraperStatus[] }) 
     .filter(s => s.lastScrapedAt)
     .sort((a, b) => (b.lastScrapedAt?.getTime() || 0) - (a.lastScrapedAt?.getTime() || 0))[0]?.lastScrapedAt
 
-  // Sort: errors first, then partial, then not run, then successful
-  const sortedStatuses = [...statuses].sort((a, b) => {
-    const order: Record<string, number> = { "Error": 0, "Partial": 1, "Not Run": 2, "Successful": 3 }
-    return (order[a.status] ?? 4) - (order[b.status] ?? 4)
-  })
+  const visibleStatuses = useMemo(() => {
+    const statusOrder: Record<string, number> = { "Error": 0, "Partial": 1, "Not Run": 2, "Successful": 3 }
+    const normalizedQuery = query.trim().toLowerCase()
+    let rows = [...statuses]
+
+    if (normalizedQuery) {
+      rows = rows.filter(row => row.companyName.toLowerCase().includes(normalizedQuery))
+    }
+
+    if (statusFilter === "zero-jobs") {
+      rows = rows.filter(row => row.status === "Successful" && row.totalJobs === 0)
+    } else if (statusFilter !== "all") {
+      rows = rows.filter(row => row.status === statusFilter)
+    }
+
+    rows.sort((a, b) => {
+      if (sortBy === "company") return a.companyName.localeCompare(b.companyName)
+      if (sortBy === "jobs") return b.totalJobs - a.totalJobs
+      if (sortBy === "duration") return (b.durationSeconds || 0) - (a.durationSeconds || 0)
+      if (sortBy === "last-run") return (b.lastScrapedAt?.getTime() || 0) - (a.lastScrapedAt?.getTime() || 0)
+      return (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4)
+    })
+
+    return rows
+  }, [query, sortBy, statusFilter, statuses])
 
   const successRate = ranCount > 0 ? Math.round((successCount / ranCount) * 100) : 0
+  const filters: Array<{ label: string; value: StatusFilter; count: number }> = [
+    { label: "All", value: "all", count: statuses.length },
+    { label: "Errors", value: "Error", count: errorCount },
+    { label: "Partial", value: "Partial", count: partialCount },
+    { label: "Pending", value: "Not Run", count: notRunCount },
+    { label: "0 jobs", value: "zero-jobs", count: zeroJobCount },
+  ]
 
   return (
     <div className="space-y-5">
       {/* Header stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {/* Success rate card */}
-        <div className="rounded-xl border border-border bg-card p-4 col-span-2 sm:col-span-1">
+        <div className="rounded-lg border border-border bg-card p-4 col-span-2 sm:col-span-1">
           <div className="flex items-center gap-2">
             <Activity className="h-4 w-4 text-muted-foreground" />
             <p className="text-xs font-medium text-muted-foreground">Health</p>
@@ -237,7 +271,7 @@ export function ScraperStatusTable({ statuses }: { statuses: ScraperStatus[] }) 
         </div>
 
         {/* Status breakdown */}
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 dark:border-emerald-800 dark:bg-emerald-950/30">
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-4 dark:border-emerald-800 dark:bg-emerald-950/30">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
             <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Successful</p>
@@ -245,7 +279,7 @@ export function ScraperStatusTable({ statuses }: { statuses: ScraperStatus[] }) 
           <p className="mt-1 text-2xl font-bold text-emerald-700 dark:text-emerald-400">{successCount}</p>
         </div>
 
-        <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-800 dark:bg-amber-950/30">
+        <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-800 dark:bg-amber-950/30">
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
             <p className="text-xs font-medium text-amber-600 dark:text-amber-400">Partial</p>
@@ -253,7 +287,7 @@ export function ScraperStatusTable({ statuses }: { statuses: ScraperStatus[] }) 
           <p className="mt-1 text-2xl font-bold text-amber-700 dark:text-amber-400">{partialCount}</p>
         </div>
 
-        <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-950/30">
+        <div className="rounded-lg border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-950/30">
           <div className="flex items-center gap-2">
             <XCircle className="h-3.5 w-3.5 text-red-500" />
             <p className="text-xs font-medium text-red-600 dark:text-red-400">Errors</p>
@@ -279,8 +313,60 @@ export function ScraperStatusTable({ statuses }: { statuses: ScraperStatus[] }) 
         <span>{statuses.length} scrapers configured</span>
       </div>
 
+      <div className="rounded-lg border border-border bg-card p-3">
+        <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_auto] lg:items-center">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              aria-label="Search scraper companies"
+              placeholder="Search companies..."
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              className="h-10 w-full rounded-lg border border-border/70 bg-background pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap gap-1.5" aria-label="Filter scraper status">
+              {filters.map(filter => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  aria-pressed={statusFilter === filter.value}
+                  onClick={() => setStatusFilter(filter.value)}
+                  className={cn(
+                    "rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                    statusFilter === filter.value
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-border/70 bg-muted/30 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  {filter.label}
+                  <span className="ml-1 text-[10px] opacity-70">{filter.count}</span>
+                </button>
+              ))}
+            </div>
+            <select
+              aria-label="Sort scraper status"
+              value={sortBy}
+              onChange={event => setSortBy(event.target.value as StatusSort)}
+              className="h-9 rounded-lg border border-border/70 bg-background px-3 text-xs text-foreground outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
+            >
+              <option value="status">Status</option>
+              <option value="last-run">Last run</option>
+              <option value="jobs">Jobs</option>
+              <option value="duration">Duration</option>
+              <option value="company">Company</option>
+            </select>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Showing {visibleStatuses.length} of {statuses.length} scrapers.
+        </p>
+      </div>
+
       {/* Status list */}
-      <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="rounded-lg border border-border bg-card overflow-hidden">
         {/* Table header */}
         <div className="flex items-center gap-3 px-4 py-2.5 sm:px-5 bg-muted/40 border-b border-border text-xs font-semibold text-muted-foreground">
           <div className="w-5" /> {/* icon space */}
@@ -293,9 +379,14 @@ export function ScraperStatusTable({ statuses }: { statuses: ScraperStatus[] }) 
         </div>
 
         {/* Rows */}
-        {sortedStatuses.map((row) => (
+        {visibleStatuses.map((row) => (
           <StatusRow key={row.companyName} row={row} />
         ))}
+        {visibleStatuses.length === 0 && (
+          <div className="px-5 py-8 text-center text-sm text-muted-foreground">
+            No scraper statuses match the current filters.
+          </div>
+        )}
       </div>
     </div>
   )

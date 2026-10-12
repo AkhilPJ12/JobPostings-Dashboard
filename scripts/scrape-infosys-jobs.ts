@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Infosys Jobs Scraper
  *
@@ -6,7 +7,7 @@
  * Detail page: has salary, skills, description — but NO posted date.
  * Uses "first-seen date" pattern.
  *
- * Usage: npx tsx scripts/scrape-infosys-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-infosys-jobs.ts
  */
 
 import { BrowserContext, chromium } from 'playwright'
@@ -31,7 +32,7 @@ async function fetchInfosysDetail(context: BrowserContext, jobUrl: string): Prom
 } | null> {
     const page = await context.newPage()
     try {
-        await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
         await sleep(randomDelay(2000, 4000))
 
         return await page.evaluate(() => {
@@ -93,7 +94,7 @@ async function scrapeInfosysJobs() {
                 console.log(`📄 Page ${pageNum}...`)
 
                 const page = await context.newPage()
-                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
+                await navigateSource(page, url, { waitUntil: 'domcontentloaded', timeout: 60000 })
                 await sleep(randomDelay(5000, 8000))
 
                 const links = await page.evaluate(() => {

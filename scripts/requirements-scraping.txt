@@ -1,0 +1,2 @@
+# Free local fallback. Fetcher dependencies and browser engines are optional at runtime.
+scrapling[fetchers]==0.4.15

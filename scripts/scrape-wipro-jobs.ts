@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Wipro Jobs Scraper
  *
@@ -5,7 +6,7 @@
  * List page: paginated via pageNumber param, 10 per page, sorted by date.
  * Detail page: has "Posting Start Date: M/DD/YY" format.
  *
- * Usage: npx tsx scripts/scrape-wipro-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-wipro-jobs.ts
  */
 
 import { BrowserContext, chromium } from 'playwright'
@@ -33,7 +34,7 @@ async function fetchWiproDetail(context: BrowserContext, jobUrl: string): Promis
 } | null> {
     const page = await context.newPage()
     try {
-        await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
         await sleep(randomDelay(2000, 4000))
 
         return await page.evaluate(() => {
@@ -91,7 +92,7 @@ async function scrapeWiproJobs() {
             console.log(`📄 Page ${pageNum + 1}...`)
 
             const page = await context.newPage()
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
+            await navigateSource(page, url, { waitUntil: 'domcontentloaded', timeout: 60000 })
             await sleep(randomDelay(5000, 8000))
             if (pageNum === 0) {
                 await page.click('button:has-text("Accept")').catch(() => {})

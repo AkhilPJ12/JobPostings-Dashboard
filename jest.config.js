@@ -36,7 +36,13 @@ const frontendConfig = {
     ],
 }
 
-// Backend tests (database queries, Supabase) — use node
+const liveTestFiles = [
+    '<rootDir>/__tests__/backend/company-queries.test.ts',
+    '<rootDir>/__tests__/backend/job-queries.test.ts',
+    '<rootDir>/__tests__/backend/supabase-connection.test.ts',
+]
+
+// Backend tests (mocked database and scraper utilities) — use node
 const backendConfig = {
     ...sharedConfig,
     displayName: 'backend',
@@ -44,6 +50,15 @@ const backendConfig = {
     testMatch: [
         '**/__tests__/backend/**/*.test.[jt]s?(x)',
     ],
+    testPathIgnorePatterns: liveTestFiles,
+}
+
+// Live Supabase smoke tests — opt in with `pnpm test:live`
+const liveConfig = {
+    ...sharedConfig,
+    displayName: 'live',
+    testEnvironment: 'node',
+    testMatch: liveTestFiles,
 }
 
 // Lib tests (pure utilities) — use jsdom for compatibility
@@ -84,6 +99,7 @@ module.exports = async () => {
             applyNextTransforms(frontendConfig),
             applyNextTransforms(backendConfig),
             applyNextTransforms(libConfig),
+            applyNextTransforms(liveConfig),
         ],
         coverageThreshold: {
             global: {

@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils'
 import { JobDashboard } from '@/components/job-dashboard'
+import { createJob, dashboardJobs, uniqueCompanyCount } from '@/__tests__/utils/job-fixtures'
 
 // Mock next/navigation
 jest.mock('next/navigation', () => ({
@@ -11,43 +12,23 @@ jest.mock('next/navigation', () => ({
     usePathname: () => '/',
 }))
 
-// Mock the job-data module so the component has data to paginate.
-// Note: jest.mock is hoisted, so mock data must be inlined in the factory.
-jest.mock('@/lib/job-data', () => {
-    const mockJobs = Array.from({ length: 15 }, (_, i) => ({
+describe('Pagination Integration', () => {
+    const paginatedJobs = Array.from({ length: 45 }, (_, i) => createJob({
         id: String(i + 1),
+        externalJobId: `pagination_${i + 1}`,
         title: `Test Job ${i + 1}`,
-        company: `Company ${String.fromCharCode(65 + (i % 3))}`,
-        companyColor: 'hsl(0, 0%, 10%)',
-        companyIcon: null,
-        location: 'Remote',
-        locationType: 'Remote',
-        department: 'Engineering',
-        type: 'Full-time',
-        postedDate: new Date(2026, 1, 18 - i).toISOString().split('T')[0],
-        endDate: null,
-        description: `Description for job ${i + 1}`,
-        securityClearance: 'No',
-        visaSponsorship: 'Yes',
-        externalJobId: `mock_${i + 1}`,
-        jobUrl: 'https://example.com/jobs/mock',
-        summary: `Summary for job ${i + 1}`,
-        requiredQualifications: ['Req 1'],
-        preferredQualifications: ['Pref 1'],
-        payRange: '$100,000 - $150,000',
+        company: `Company ${i % 3}`,
+        department: i % 2 === 0 ? 'Engineering' : 'Product Management',
+        description: 'Test pagination result',
+        summary: 'Test pagination result',
     }))
 
-    const actual = jest.requireActual('@/lib/job-data')
-    return {
-        ...actual,
-        getJobs: jest.fn().mockResolvedValue(mockJobs),
-        getUniqueCompanyCount: jest.fn().mockResolvedValue(3),
-    }
-})
+    beforeEach(() => {
+        sessionStorage.clear()
+    })
 
-describe('Pagination Integration', () => {
     it('should navigate between pages', async () => {
-        render(<JobDashboard />)
+        render(<JobDashboard initialJobs={dashboardJobs} initialCompanyCount={uniqueCompanyCount()} />)
 
         await waitFor(() => {
             expect(screen.queryByText(/Loading job listings/i)).not.toBeInTheDocument()
@@ -67,7 +48,7 @@ describe('Pagination Integration', () => {
     })
 
     it('should reset to page 1 when searching', async () => {
-        render(<JobDashboard />)
+        render(<JobDashboard initialJobs={paginatedJobs} initialCompanyCount={uniqueCompanyCount(paginatedJobs)} />)
 
         await waitFor(() => {
             expect(screen.queryByText(/Loading job listings/i)).not.toBeInTheDocument()
@@ -83,13 +64,12 @@ describe('Pagination Integration', () => {
         })
 
         // Search should reset to page 1
-        const searchInput = screen.getByPlaceholderText(/Search jobs/i)
+        const searchInput = screen.getByLabelText(/Search jobs/i)
         fireEvent.change(searchInput, { target: { value: 'Test' } })
 
         await waitFor(() => {
             // Should be back on page 1
-            const pageOnes = screen.getAllByText('1')
-            expect(pageOnes.length).toBeGreaterThan(0)
+            expect(screen.getByRole('button', { name: /go to page 1/i })).toHaveAttribute('aria-current', 'page')
         }, { timeout: 1000 })
     })
 })

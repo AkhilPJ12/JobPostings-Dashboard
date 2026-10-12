@@ -1,3 +1,4 @@
+import { fetchSource } from '../lib/modules/ingestion/http'
 /**
  * Visa Jobs Scraper (API-based)
  *
@@ -79,7 +80,7 @@ async function scrapeVisaJobs() {
         const from = page * CONFIG.pageSize
         console.log(`📄 Page ${page + 1} (from=${from})...`)
 
-        const resp = await fetch(endpoint, {
+        const resp = await fetchSource(endpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -97,8 +98,7 @@ async function scrapeVisaJobs() {
         })
 
         if (!resp.ok) {
-            console.log(`   ⚠️ API error ${resp.status}. Stopping.`)
-            break
+            throw new Error(`API error ${resp.status} while paging Visa jobs`)
         }
 
         const data = await resp.json() as { jobDetails?: VisaApiJob[] }
@@ -168,6 +168,8 @@ async function scrapeVisaJobs() {
                 pay_range: extractPayRange(description),
                 security_clearance: detectSecurityClearance(textForSignals),
                 h1b_sponsorship: detectH1BSponsorship(textForSignals),
+                structuredSourceFields: { department: dept === 'General' ? null : dept },
+                sourceHints: { employmentType: j.typeOfEmployment || '' },
                 job_url: j.applyUrl || careerUrl,
                 is_active: true,
             }

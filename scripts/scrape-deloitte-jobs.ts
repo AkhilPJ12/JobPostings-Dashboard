@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Deloitte Jobs Scraper
  *
@@ -111,7 +112,7 @@ async function runDeloitteSource(
             const listUrl = buildListUrl(sourceUrl, offset)
             console.log(`📄 Page ${pageNum} (offset=${offset})...`)
 
-            await page.goto(listUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+            await navigateSource(page, listUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
             await sleep(1400)
 
             const cards = await page.evaluate(() => {

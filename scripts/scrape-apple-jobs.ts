@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Apple Jobs Scraper
  *
@@ -13,7 +14,7 @@
  * Detail page sections use h2.t-label as sidebar labels,
  * with content in the adjacent div.column.large-9.
  *
- * Usage: npx tsx scripts/scrape-apple-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-apple-jobs.ts
  */
 
 import { BrowserContext, chromium } from 'playwright'
@@ -54,7 +55,7 @@ type DetailData = {
 async function fetchAppleJobDetail(context: BrowserContext, jobUrl: string): Promise<DetailData> {
     const page = await context.newPage()
     try {
-        await page.goto(jobUrl, { waitUntil: 'networkidle', timeout: 45000 })
+        await navigateSource(page, jobUrl, { waitUntil: 'networkidle', timeout: 45000 })
         await sleep(randomDelay(800, 1500))
 
         const sections = await page.evaluate(() => {
@@ -111,7 +112,7 @@ async function scrapeAppleJobs() {
     try {
         // ── Phase 1: collect all matching jobs from list pages ──────────────
         console.log(`📄 Loading Apple Careers page...`)
-        await page.goto(careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
+        await navigateSource(page, careerUrl, { waitUntil: 'networkidle', timeout: 60000 })
         await sleep(5000)
 
         const listJobs: ListJob[] = []
@@ -226,6 +227,12 @@ async function scrapeAppleJobs() {
                 pay_range: extractPayRange(detail.payBenefits || fullDescription),
                 security_clearance: detectSecurityClearance(fullDescription),
                 h1b_sponsorship: detectH1BSponsorship(fullDescription),
+                structuredSourceFields: {
+                    department: j.team || null,
+                    required_qualifications: detail.minQualifications,
+                    preferred_qualifications: detail.prefQualifications,
+                },
+                sourceHints: { payBenefits: detail.payBenefits || '' },
                 job_url: j.url,
                 is_active: true,
             }

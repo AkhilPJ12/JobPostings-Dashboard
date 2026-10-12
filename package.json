@@ -2,14 +2,24 @@
   "name": "my-project",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20 <21",
+    "pnpm": ">=9 <10"
+  },
   "scripts": {
     "dev": "next dev --turbo",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm test:unit",
+    "test:unit": "jest --ignoreProjects live",
+    "test:live": "jest --selectProjects live",
+    "test:watch": "jest --ignoreProjects live --watch",
+    "test:coverage": "jest --ignoreProjects live --coverage",
+    "ci": "pnpm typecheck && pnpm test:unit && pnpm build",
+    "enrich:ai": "tsx scripts/enrich-jobs-ai.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

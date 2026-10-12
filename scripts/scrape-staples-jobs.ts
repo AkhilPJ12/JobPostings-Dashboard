@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Staples Jobs Scraper
  *
@@ -5,7 +6,7 @@
  * List page: paginated via ?p=N, 15 jobs per page.
  * Detail page: has Date posted, Pay Range, Category, Qualifications.
  *
- * Usage: npx tsx scripts/scrape-staples-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-staples-jobs.ts
  */
 
 import { BrowserContext, chromium } from 'playwright'
@@ -44,7 +45,7 @@ type DetailData = {
 async function fetchStaplesDetail(context: BrowserContext, jobUrl: string): Promise<DetailData | null> {
     const page = await context.newPage()
     try {
-        await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
         await sleep(randomDelay(2000, 3500))
 
         const data = await page.evaluate(() => {
@@ -140,7 +141,7 @@ async function scrapeStaplesJobs() {
 
             console.log(`📄 Page ${pageNum}...`)
             const page = await context.newPage()
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
+            await navigateSource(page, url, { waitUntil: 'domcontentloaded', timeout: 60000 })
             await sleep(randomDelay(5000, 8000))
 
             const links = await page.evaluate(() => {
@@ -216,6 +217,13 @@ async function scrapeStaplesJobs() {
                     pay_range: payRange,
                     security_clearance: detectSecurityClearance(fullText),
                     h1b_sponsorship: detectH1BSponsorship(fullText),
+                    structuredSourceFields: {
+                        department: d.category || null,
+                        pay_range: d.pay || null,
+                        required_qualifications: d.required,
+                        preferred_qualifications: d.preferred,
+                    },
+                    sourceHints: { remote: d.remote || '' },
                     job_url: batch[k].url,
                     is_active: true,
                 }

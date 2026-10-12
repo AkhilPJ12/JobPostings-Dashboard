@@ -1,3 +1,4 @@
+import { fetchSource } from '../lib/modules/ingestion/http'
 /**
  * JPMorgan Chase Jobs Scraper (Oracle HCM API)
  *
@@ -88,7 +89,7 @@ async function scrapeJPMorganJobs() {
         console.log(`📄 Page ${page + 1} (offset=${offset})...`)
 
         const endpoint = buildEndpoint(CONFIG.pageSize, offset)
-        const resp = await fetch(endpoint, {
+        const resp = await fetchSource(endpoint, {
             headers: {
                 'Accept': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -96,8 +97,7 @@ async function scrapeJPMorganJobs() {
         })
 
         if (!resp.ok) {
-            console.log(`   ⚠️ API error ${resp.status}. Stopping.`)
-            break
+            throw new Error(`API error ${resp.status} while paging JPMorgan jobs`)
         }
 
         const data = await resp.json() as { items?: { requisitionList?: Requisition[] }[] }
@@ -160,6 +160,8 @@ async function scrapeJPMorganJobs() {
                 pay_range: extractPayRange(description),
                 security_clearance: detectSecurityClearance(fullText),
                 h1b_sponsorship: detectH1BSponsorship(fullText),
+                structuredSourceFields: { department: dept === 'General' ? null : dept },
+                sourceHints: { employmentType: j.WorkerType || j.JobType || j.ContractType || '' },
                 job_url: `https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job/${id}`,
                 is_active: true,
             }

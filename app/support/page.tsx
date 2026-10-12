@@ -52,7 +52,7 @@ function CryptoCard({ name, address, icon, color }: typeof cryptoAddresses[0]) {
   return (
     <div
       className={cn(
-        "rounded-xl border bg-gradient-to-br p-5 transition-all hover:shadow-md",
+        "rounded-lg border bg-gradient-to-br p-5 transition-all hover:shadow-md",
         color
       )}
     >
@@ -123,7 +123,7 @@ export default function SupportPage() {
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-10">
         {/* Hero */}
         <div className="text-center mb-10">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-lg bg-primary/10">
             <Heart className="h-8 w-8 text-primary" />
           </div>
           <h1 className="text-2xl font-bold text-foreground sm:text-3xl">
@@ -144,7 +144,7 @@ export default function SupportPage() {
             <h2 className="text-lg font-semibold text-foreground">Support the Project</h2>
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-6 mb-5">
+          <div className="rounded-lg border border-border bg-card p-6 mb-5">
             <p className="text-sm text-muted-foreground leading-relaxed mb-1">
               Any contribution, no matter how small, goes a long way. Your support directly funds:
             </p>
@@ -192,7 +192,7 @@ export default function SupportPage() {
             <h2 className="text-lg font-semibold text-foreground">Open for Collaboration</h2>
           </div>
 
-          <div className="rounded-2xl border border-primary/20 bg-primary/5 p-6">
+          <div className="rounded-lg border border-primary/20 bg-primary/5 p-6">
             <p className="text-sm text-muted-foreground leading-relaxed">
               I&#39;m passionate about building cool things and always open to collaborating with like-minded
               people. Whether it&#39;s this project or something entirely new &mdash; if you have an interesting
@@ -231,7 +231,7 @@ export default function SupportPage() {
             <h2 className="text-lg font-semibold text-foreground">Get in Touch</h2>
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-6">
+          <div className="rounded-lg border border-border bg-card p-6">
             <p className="text-sm text-muted-foreground mb-6">
               Have a question, feedback, or need help? Fill out the form below and we&#39;ll get back to you.
             </p>
@@ -301,7 +301,7 @@ export default function SupportPage() {
                   value={formData.message}
                   onChange={(e) => setFormData({ ...formData, message: e.target.value })}
                   rows={4}
-                  className="flex w-full rounded-xl border border-input bg-background px-4 py-3 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+                  className="flex w-full rounded-lg border border-input bg-background px-4 py-3 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
                   required
                 />
               </div>

@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Generic Workday Jobs Scraper
  *
@@ -5,8 +6,8 @@
  * Works for: CVS, AT&T, Walmart, and any other *.myworkdayjobs.com site.
  *
  * Usage:
- *   npx tsx scripts/scrape-workday-jobs.ts <companyName>
- *   e.g. npx tsx scripts/scrape-workday-jobs.ts "CVS"
+ *   pnpm exec tsx scripts/scrape-workday-jobs.ts <companyName>
+ *   e.g. pnpm exec tsx scripts/scrape-workday-jobs.ts "CVS"
  */
 
 import { chromium } from 'playwright'
@@ -66,8 +67,7 @@ async function scrapeWorkdayJobs(companyName: string) {
 
     const urls = [company.careers_url, company.careers_url_1].filter(Boolean) as string[]
     if (urls.length === 0) {
-        console.error(`❌ No careers URL for ${companyName}`)
-        return
+        throw new Error(`No careers URL for ${companyName}`)
     }
 
     const allJobs: DbJob[] = []
@@ -116,7 +116,7 @@ async function scrapeOneWorkdayUrl(
     const page = await context.newPage()
 
     try {
-        await page.goto(careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
+        await navigateSource(page, careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
         await sleep(2000)
 
         // Extract tenant/site info from the Workday page URL
@@ -252,6 +252,7 @@ async function scrapeOneWorkdayUrl(
                     pay_range: truncateField(extractPayRange(textForSignals)),
                     security_clearance: detectSecurityClearance(textForSignals),
                     h1b_sponsorship: detectH1BSponsorship(textForSignals),
+                    sourceHints: { employmentType: detail?.timeType || '' },
                     job_url: truncateField(detailsUrl),
                     is_active: true,
                 }
@@ -310,7 +311,7 @@ function parseWorkdayFacets(url: string): Record<string, string[]> {
 
 const companyArg = process.argv[2]
 if (!companyArg) {
-    console.error('Usage: npx tsx scripts/scrape-workday-jobs.ts <companyName>')
+    console.error('Usage: pnpm exec tsx scripts/scrape-workday-jobs.ts <companyName>')
     process.exit(1)
 }
 

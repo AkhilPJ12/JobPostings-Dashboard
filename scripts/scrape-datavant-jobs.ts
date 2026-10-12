@@ -1,3 +1,4 @@
+import { fetchSource } from '../lib/modules/ingestion/http'
 /**
  * Datavant Jobs Scraper
  *
@@ -7,7 +8,7 @@
  *
  * Has `first_published` for posting date and full HTML content.
  *
- * Usage: npx tsx scripts/scrape-datavant-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-datavant-jobs.ts
  */
 
 import {
@@ -47,10 +48,9 @@ async function scrapeDatevantJobs() {
     const apiUrl = `https://boards-api.greenhouse.io/v1/boards/${CONFIG.boardToken}/jobs?content=true`
     console.log(`🔗 API URL: ${apiUrl}`)
 
-    const resp = await fetch(apiUrl)
+    const resp = await fetchSource(apiUrl)
     if (!resp.ok) {
-        console.error(`❌ API error: ${resp.status}`)
-        return
+        throw new Error(`API error: ${resp.status}`)
     }
 
     const data = await resp.json() as { jobs: GreenhouseJob[] }
@@ -100,6 +100,7 @@ async function scrapeDatevantJobs() {
             pay_range: extractPayRange(fullText),
             security_clearance: detectSecurityClearance(fullText),
             h1b_sponsorship: detectH1BSponsorship(fullText),
+            structuredSourceFields: { department: j.departments?.[0]?.name || null },
             job_url: j.absolute_url || `https://www.datavant.com/about/careers/open-roles/job?gh_jid=${j.id}`,
             is_active: true,
         }

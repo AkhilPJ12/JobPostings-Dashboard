@@ -1,81 +1,29 @@
 # Scrapers Technical Guide
 
-This document explains every scraper in this project one-by-one:
-- where it fetches jobs from,
-- filters applied,
-- date window logic,
-- fallback behavior,
-- pagination/stop conditions,
-- fields written to DB.
+The company sections below document source URLs, extraction rules, and source-specific caveats. The common architecture changed in October 2026; historical company notes may describe earlier fallback behavior. The database read layer now applies the final 14-day window and source identity rules.
 
-## 1. Common Scraper Architecture
+## Shared ingestion
 
-### 1.1 Shared helpers
-Most scrapers use `scripts/scraper-utils.ts` for:
-- `parsePostedDate(...)`
-- `isWithinDaysOrFuture(...)` (allows future posting dates)
-- `isUSLocation(...)`
-- `detectSecurityClearance(...)`
-- `detectH1BSponsorship(...)`
-- `determineLocationType(...)`
-- `determineEmploymentType(...)`
-- `upsertJobsBatch(...)`
+`lib/modules/ingestion/registry.ts` lists all 26 integrations and divides them into API and browser partitions. The orchestrator in `scripts/scrape-all-jobs.ts` runs at most four API processes or one browser process per worker, claims a database lease per company, and writes one historical run event. Each child emits a `ScrapeResult` JSON marker. A clean zero-job result is successful; missing output or a source failure is not inferred from log wording. Individual scripts can still run directly and write their own run event.
 
-### 1.2 DB write behavior
-All scrapers write to `jobs` with upsert conflict key:
-- `external_job_id`
+`upsertJobsBatch` in `scripts/scraper-utils.ts` writes normalized source fields and a stable source hash. It throws on database failure. The first-seen identity table and database trigger prevent an old undated role from becoming fresh after content cleanup. `raw_job_payload` is a normalized scraper snapshot; source HTTP payloads were not stored by the legacy scripts. Missing sponsorship, clearance, work arrangement, and employment type are unknown unless stated. The SQL migration restores recoverable source fields from older AI-rewritten rows.
 
-So re-runs update existing jobs instead of creating duplicates.
+Public source API scrapers use `fetchSource` for bounded retries, a 30-second request deadline, and a per-process request cap. Browser scripts use the shared Playwright launcher and a ten-minute process deadline. The scheduled workflow runs lifecycle maintenance once, then four partitions of each source type with at most four jobs total in parallel.
 
-### 1.3 Standard DB payload fields
-Most scrapers write these fields:
-- `company_id`
-- `external_job_id`
-- `title`
-- `location`
-- `location_type`
-- `department`
-- `employment_type`
-- `posted_date`
-- `description`
-- `summary`
-- `required_qualifications`
-- `preferred_qualifications`
-- `pay_range`
-- `security_clearance`
-- `h1b_sponsorship`
-- `job_url`
-- `is_active`
+## Enrichment
 
-### 1.4 Status tracking
-`scripts/scrape-all-jobs.ts` runs all scrapers and upserts one status row per company into `scraper_runs`:
-- `status`: `Successful` | `Error` | `Partial`
-- `started_at`, `completed_at`, `duration_seconds`
-- `error_message`
+The independent `enrich-jobs.yml` workflow calls Ollama Cloud after source jobs are saved. It is gated by the GitHub variable `AI_ENRICHMENT_ENABLED`. The worker claims queue rows atomically, consumes UTC daily quota before each request, validates JSON and evidence, and publishes to `jobs.ai_result` only if the source hash and lease still match. AI never rewrites the source title, description, date, identity, or URL. Apply `scripts/sql/ai-enrichment.sql` followed by `scripts/sql/2026-10-10-architecture.sql` before running it.
 
-`onConflict: company_name` means company status row is updated on rerun.
+## Master runner commands
 
----
+```bash
+pnpm exec tsx scripts/scrape-all-jobs.ts --maintenance-only
+pnpm exec tsx scripts/scrape-all-jobs.ts --api-only --batch 0
+pnpm exec tsx scripts/scrape-all-jobs.ts --browser-only --batch 0
+pnpm exec tsx scripts/scrape-all-jobs.ts amazon
+```
 
-## 2. Master Runner
-
-File: `scripts/scrape-all-jobs.ts`
-
-Runs these scrapers in sequence:
-- Amazon
-- Microsoft (`scrape-pcsx-jobs.ts microsoft`)
-- Nvidia (`scrape-pcsx-jobs.ts nvidia`)
-- Google
-- Meta
-- Apple
-- IBM
-- Salesforce
-- Accenture
-- Visa
-- JPMorgan Chase
-- Deloitte
-
-Timeout per scraper: 10 minutes.
+Each source has a ten-minute process deadline. For any new company, add its script and registry entry, use `upsertJobsBatch`, and ensure source fetch failures throw so the run status reflects the failure.
 
 ---
 
@@ -490,20 +438,20 @@ In no-date fallback mode, `posted_date` defaults to today.
 Run all:
 
 ```bash
-npx tsx scripts/scrape-all-jobs.ts
+pnpm exec tsx scripts/scrape-all-jobs.ts
 ```
 
 Run one via master runner:
 
 ```bash
-npx tsx scripts/scrape-all-jobs.ts microsoft
+pnpm exec tsx scripts/scrape-all-jobs.ts microsoft
 ```
 
 Run individual scraper:
 
 ```bash
-npx tsx scripts/scrape-visa-jobs.ts
-npx tsx scripts/scrape-amazon-jobs.ts
+pnpm exec tsx scripts/scrape-visa-jobs.ts
+pnpm exec tsx scripts/scrape-amazon-jobs.ts
 ```
 
 ---

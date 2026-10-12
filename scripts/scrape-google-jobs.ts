@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Google Jobs Scraper
  *
@@ -178,7 +179,7 @@ async function _runGoogleUrl(baseUrl: string, pages: number, requireDate: boolea
             const pageUrl = buildGooglePageUrl(baseUrl, pageNum)
             console.log(`📄 Google page ${pageNum}: ${pageUrl}`)
 
-            await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+            await navigateSource(page, pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
             await sleep(randomDelay(1400, 2600))
 
             // Extract jobs using primary selectors, with fallback to structural patterns
@@ -208,7 +209,7 @@ async function _runGoogleUrl(baseUrl: string, pages: number, requireDate: boolea
 
             if (jobs.length === 0 && pageNum === 1) {
                 console.log('   ⚠️ No jobs found with selectors. Retrying with networkidle...')
-                await page.goto(baseUrl, { waitUntil: 'networkidle', timeout: 60000 })
+                await navigateSource(page, baseUrl, { waitUntil: 'networkidle', timeout: 60000 })
                 await sleep(3000)
                 jobs = await page.evaluate(() => {
                     let cards = Array.from(document.querySelectorAll('li.lLd3Je'))
@@ -391,7 +392,7 @@ async function scrapeGoogleJobs() {
         if (!job.job_url) { failed++; continue }
 
         try {
-            await detailPage.goto(job.job_url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+            await navigateSource(detailPage, job.job_url, { waitUntil: 'domcontentloaded', timeout: 30000 })
             await sleep(randomDelay(1500, 2500))
 
             // Extract all text content from the main content area
@@ -456,7 +457,7 @@ async function scrapeGoogleJobs() {
 
     console.log(`   📅 ${detailFetched} jobs got date from detail page fetch`)
     console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs...`)
-    const upsertedCount = await upsertJobsBatch(collectedJobs, 50, true)
+    const upsertedCount = await upsertJobsBatch(collectedJobs)
     const dbCount = await getCompanyJobCount(company.id)
     logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, sourceUrl)
 }

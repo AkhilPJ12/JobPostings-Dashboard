@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Accenture Jobs Scraper
  *
@@ -98,7 +99,7 @@ async function scrapeAccentureJobs() {
     const page = await context.newPage()
 
     try {
-        await page.goto(careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
+        await navigateSource(page, careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
         await sleep(2500)
 
         const collectedJobs: DbJob[] = []
@@ -233,6 +234,8 @@ async function scrapeAccentureJobs() {
                     pay_range: extractPayRange(description),
                     security_clearance: detectSecurityClearance(fullText),
                     h1b_sponsorship: detectH1BSponsorship(fullText),
+                    structuredSourceFields: { department: departmentRaw === 'General' ? null : departmentRaw },
+                    sourceHints: { employmentType: r.employeeType || r.jobScheduleDescription || r.jobTypeDescription || '' },
                     job_url: jobUrl,
                     is_active: true,
                 }

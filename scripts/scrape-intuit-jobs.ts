@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Intuit Jobs Scraper
  *
@@ -8,7 +9,7 @@
  *
  * Sort by "Date Posted" is selected via dropdown to get most recent jobs first.
  *
- * Usage: npx tsx scripts/scrape-intuit-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-intuit-jobs.ts
  */
 
 import { BrowserContext, chromium, Page } from 'playwright'
@@ -42,7 +43,7 @@ type DetailData = {
 async function fetchIntuitDetail(context: BrowserContext, jobUrl: string): Promise<DetailData | null> {
     const page = await context.newPage()
     try {
-        await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
         await sleep(randomDelay(2000, 4000))
 
         return await page.evaluate(() => {
@@ -133,7 +134,7 @@ async function scrapeIntuitJobs() {
         // Phase 1: Collect job URLs from list pages
         console.log('\n📋 Phase 1: Collecting job URLs...')
         const page = await context.newPage()
-        await page.goto(careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
+        await navigateSource(page, careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
         await sleep(10000)
 
         // Sort by Date Posted

@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * PCSX Platform Scraper
  *
@@ -418,6 +419,7 @@ async function runNvidiaApiPages(
                 pay_range: 'Not specified',
                 security_clearance: detectSecurityClearance(textForSignals),
                 h1b_sponsorship: detectH1BSponsorship(textForSignals),
+                structuredSourceFields: { department: p.department || null },
                 job_url: detailsUrl,
                 is_active: true,
             }
@@ -458,7 +460,7 @@ async function runNvidiaWorkdayPages(
     const page = await context.newPage()
 
     try {
-        await page.goto(careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
+        await navigateSource(page, careerUrl, { waitUntil: 'domcontentloaded', timeout: 90000 })
         await sleep(1800)
 
         const sourceInfo = await page.evaluate(() => {
@@ -588,6 +590,7 @@ async function runNvidiaWorkdayPages(
                     pay_range: extractPayRange(textForSignals),
                     security_clearance: detectSecurityClearance(textForSignals),
                     h1b_sponsorship: detectH1BSponsorship(textForSignals),
+                    sourceHints: { employmentType: detail?.timeType || '' },
                     job_url: detailsUrl,
                     is_active: true,
                 }
@@ -709,6 +712,7 @@ async function runMicrosoftApiPages(
                 pay_range: 'Not specified',
                 security_clearance: 'N/A',
                 h1b_sponsorship: 'N/A',
+                structuredSourceFields: { department: p.department || null },
                 job_url: detailsUrl,
                 is_active: true,
             }
@@ -929,7 +933,7 @@ async function scrapePCSXJobs(companyKey: string) {
 
 const companyArg = process.argv[2]?.toLowerCase()
 if (!companyArg) {
-    console.error('Usage: npx tsx scripts/scrape-pcsx-jobs.ts <microsoft|nvidia>')
+    console.error('Usage: pnpm exec tsx scripts/scrape-pcsx-jobs.ts <microsoft|nvidia>')
     process.exit(1)
 }
 

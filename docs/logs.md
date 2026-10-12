@@ -119,7 +119,7 @@
   - `__tests__/backend/scraper-status.test.ts`
   - verifies latest status selection and `Not Run` fallback behavior
 - Executed targeted tests:
-  - `npx jest --runTestsByPath __tests__/backend/scraper-utils.test.ts __tests__/backend/scraper-status.test.ts --runInBand`
+  - `pnpm exec jest --runTestsByPath __tests__/backend/scraper-utils.test.ts __tests__/backend/scraper-status.test.ts --runInBand`
   - Result: 18 passing, 0 failing
 
 ### 8. Existing Test Suite Constraint (Known)
@@ -313,3 +313,74 @@
 - All 27 company icons verified working.
 - Zombie prevention via soft-delete for no-date companies.
 - Tests: 33/33 passing. Build: passing.
+
+---
+
+## 2026-06-14
+
+### 1. Dashboard Review Fixes
+- Standardized project tooling on `pnpm` with Node 20 metadata, `.nvmrc`, CI workflow, and `typecheck`/`test:unit`/`test:live`/`ci` scripts.
+- Removed tracked `package-lock.json`, kept `pnpm-lock.yaml`, and removed `typescript.ignoreBuildErrors`.
+- Split live Supabase tests behind `pnpm test:live`; default tests now use deterministic fixture props.
+- Moved shared job UI types/date formatting into `lib/job-types.ts`.
+- Made app Supabase client lazy and typed with local schema fields including `end_date` and `Company_icon`.
+- Moved scraper writes to the lazy service-role client via `SUPABASE_SERVICE_ROLE_KEY`.
+- Updated scraper status persistence to `upsert(..., { onConflict: 'company_name' })`.
+- Merged the stale `styles/globals.css` content into `app/globals.css` and removed the duplicate stylesheet.
+- Removed client-side database imports from `JobDashboard` and `FilterSidebar`; filter options/counts now derive from loaded jobs.
+- Added strict numeric job ID validation, accessible clear/pagination/filter labels, and fixture-based dashboard tests.
+- Updated README, scraper docs, SQL lifecycle docs, env example, and GitHub scraper workflow notes.
+
+### 2. Current Documentation/Run Request
+- Added this concise June 14 log entry as the ongoing task record.
+- Refreshed README commands to include `pnpm typecheck`, `pnpm test:unit`, `pnpm test:live`, and `pnpm ci`.
+- Clarified scraper docs that writes use server-only `SUPABASE_SERVICE_ROLE_KEY`.
+
+### 3. Local Run Attempt
+- Attempted `pnpm dev`; blocked because `pnpm` is not installed in the current shell.
+- Checked local runtimes:
+  - active NVM Node 25 crashes with a `dyld` libc++ symbol error,
+  - Corepack is not installed,
+  - Bun/Yarn are not installed,
+  - Homebrew `node@20` alias points to the broken Node 22 install,
+  - Homebrew Node 22 crashes because ICU `libicui18n.74.dylib` is missing.
+- Approved Homebrew repair started but was interrupted after it hung for several minutes compiling `python@3.13`.
+- Downloaded standalone Node `v20.20.2` to `/private/tmp` and used it only for this local run.
+- Started the Next.js dev server with the standalone Node binary.
+- Added `turbopack.root = process.cwd()` in `next.config.mjs` after Next warned about a parent `/Users/akhil/package-lock.json`.
+- Verified local server:
+  - `http://localhost:3000/support` returned `200 OK`,
+  - `http://localhost:3000` returned `200 OK` after first-load warmup.
+- Local URL for this run: `http://localhost:3000`.
+
+### 4. UI Improvement Implementation
+- Began implementing the scan-focused UI plan across dashboard, filters, job cards/list rows, job detail, scraper status, visual tokens, and tests.
+- Reworked dashboard search into a compact command area with quick filters, persisted `Grid` / `List` view mode, quieter cards, dense list rows, and explicit `Details` / `Apply` actions.
+- Extended filters with visa sponsorship and security clearance, added counts and `Apply (N results)` feedback, and kept search/filter/sort/page/view state in session storage.
+- Added sticky job-detail apply/summary UI for desktop and mobile, plus tighter long-description sections.
+- Added scraper status search, status chips, zero-job filtering, and sort controls.
+- Reduced rounded/gradient-heavy UI treatments and aligned supporting loading/support surfaces with the calmer card radius.
+- Added focused UI tests for filter counts, quick filters, view persistence, apply/details actions, job detail summary, and scraper status filtering/sorting.
+- Added `jest.d.ts` for Jest DOM type coverage and fixed typecheck issues in mock data, department typing, and TI scraper DOM typing.
+- Verification:
+  - `pnpm install --frozen-lockfile` was attempted after hydrating pnpm 8.15.9 through Corepack; pnpm prompted to purge/recreate the existing pnpm-10 `node_modules`, so install was left untouched while the running app stayed up.
+  - `pnpm typecheck` passed.
+  - `pnpm test:unit` passed: 12 suites, 64 tests.
+  - `pnpm build` passed after rerunning with network access for `next/font` Google Font fetches.
+  - Local dev server is running at `http://localhost:3000`; `/` and `/support` returned `200 OK`.
+  - `/jobs/123abc` renders the Next not-found page body; dev server reports `200` for the streamed not-found response.
+
+### 5. AI Job Content Enrichment Implementation
+- Began implementing post-DB Gemini enrichment so scrapers save first and AI rewrites existing rows later.
+- Added AI metadata fields/types for `jobs`, plus `ai_enrichment_usage` quota tracking and SQL helper `scripts/sql/ai-enrichment.sql`.
+- Added Gemini REST utilities for strict JSON output, prompt trimming, source hashing, enum normalization, and unchanged-source preservation.
+- Added `scripts/enrich-jobs-ai.ts` and `pnpm enrich:ai` for manual batches with `--limit`, `--company`, `--status`, and `--dry-run`.
+- Updated scraper upserts to store raw payloads/source hashes, mark new or changed jobs as `pending`, and preserve enriched fields when the source hash is unchanged.
+- Added optional Phase 3 in the master scraper runner when `AI_ENRICHMENT_ENABLED=true`; enrichment failures do not block scraper completion.
+- Updated `.env.example`, README, and scraper docs with Gemini config, quota behavior, SQL setup, and manual run commands.
+- Verification:
+  - `pnpm typecheck` passed.
+  - `pnpm test:unit` passed: 14 suites, 78 tests.
+  - `pnpm build` passed.
+  - `git diff --check` passed.
+  - Local dev server is still responding at `http://localhost:3000`.

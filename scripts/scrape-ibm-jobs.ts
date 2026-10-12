@@ -1,3 +1,4 @@
+import { fetchSource } from '../lib/modules/ingestion/http'
 /**
  * IBM Jobs Scraper (API-based)
  *
@@ -102,7 +103,7 @@ async function scrapeIBMJobs() {
         console.log(`📄 Page ${page + 1} (from=${from})...`)
 
         const payload = buildPayload(from, CONFIG.pageSize)
-        const resp = await fetch(CONFIG.endpoint, {
+        const resp = await fetchSource(CONFIG.endpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -115,8 +116,7 @@ async function scrapeIBMJobs() {
         })
 
         if (!resp.ok) {
-            console.log(`   ⚠️ API error ${resp.status}. Stopping.`)
-            break
+            throw new Error(`API error ${resp.status} while paging IBM jobs`)
         }
 
         const data = await resp.json() as { hits?: { hits?: IbmHit[] } }
@@ -175,6 +175,7 @@ async function scrapeIBMJobs() {
                 pay_range: extractPayRange(description),
                 security_clearance: detectSecurityClearance(fullText),
                 h1b_sponsorship: detectH1BSponsorship(fullText),
+                structuredSourceFields: { department: src.field_keyword_08 || null },
                 job_url: url || careerUrl,
                 is_active: true,
             }

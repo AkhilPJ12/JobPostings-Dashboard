@@ -1,9 +1,4 @@
-import {
-    getUniqueCompanies,
-    getUniqueDepartments,
-    getJobById,
-    formatDate,
-} from '@/lib/job-data'
+import { formatDate } from '@/lib/job-types'
 
 describe('job-data utilities', () => {
     describe('formatDate', () => {

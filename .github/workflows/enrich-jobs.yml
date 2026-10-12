@@ -1,0 +1,28 @@
+name: Enrich Jobs
+
+on:
+  schedule:
+    - cron: '13 */4 * * *'
+  workflow_dispatch:
+
+jobs:
+  enrich:
+    if: vars.AI_ENRICHMENT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9.15.9
+      - run: pnpm install --frozen-lockfile
+      - name: Enrich pending jobs
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+        run: pnpm enrich:ai -- --limit 200

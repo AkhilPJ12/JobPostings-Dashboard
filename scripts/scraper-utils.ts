@@ -11,23 +11,51 @@
  * - Rate limiting
  */
 
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import * as dotenv from 'dotenv'
 import * as path from 'path'
+import type { Database, Json } from '../lib/supabase'
+import { getSourceFailures, resetSourceFailures } from '../lib/modules/ingestion/health'
+import {
+    prepareJobForAiUpsert,
+    type AiEnrichmentStatus,
+    type ExistingAiJobRecord,
+    type StructuredSourceFields,
+} from '../lib/modules/ingestion/source-payload'
 
 // Load environment variables
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') })
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+let supabaseAdminClient: SupabaseClient<Database> | null = null
 
-if (!supabaseUrl || !supabaseAnonKey) {
-    console.error('❌ Missing Supabase environment variables.')
-    console.error('Make sure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are set in .env.local')
-    process.exit(1)
+export function getSupabaseAdminClient(): SupabaseClient<Database> {
+    if (supabaseAdminClient) return supabaseAdminClient
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+        throw new Error(
+            'Missing scraper Supabase environment variables. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+        )
+    }
+
+    supabaseAdminClient = createClient<Database>(supabaseUrl, supabaseServiceRoleKey, {
+        auth: {
+            persistSession: false,
+            autoRefreshToken: false,
+        },
+    })
+    return supabaseAdminClient
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = new Proxy({} as SupabaseClient<Database>, {
+    get(_target, prop) {
+        const client = getSupabaseAdminClient()
+        const value = (client as any)[prop]
+        return typeof value === 'function' ? value.bind(client) : value
+    },
+})
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -36,9 +64,9 @@ export interface DbJob {
     external_job_id: string
     title: string
     location: string
-    location_type: 'Remote' | 'Hybrid' | 'Onsite'
+    location_type: 'Remote' | 'Hybrid' | 'Onsite' | null
     department: string
-    employment_type: 'Full-time' | 'Part-time' | 'Contract' | 'Internship'
+    employment_type: 'Full-time' | 'Part-time' | 'Contract' | 'Internship' | null
     posted_date: string
     end_date?: string | null
     description: string
@@ -50,6 +78,15 @@ export interface DbJob {
     h1b_sponsorship: 'Yes' | 'No' | 'N/A'
     job_url: string
     is_active: boolean
+    raw_job_payload?: Json | null
+    source_content_hash?: string | null
+    ai_enrichment_status?: AiEnrichmentStatus | null
+    ai_enrichment_model?: string | null
+    ai_enriched_at?: string | null
+    ai_enrichment_error?: string | null
+    ai_enrichment_attempts?: number
+    structuredSourceFields?: StructuredSourceFields
+    sourceHints?: Record<string, string>
 }
 
 export interface CompanyRecord {
@@ -117,12 +154,13 @@ const SECURITY_CLEARANCE_PATTERNS = [
  * Detect if a job description mentions security clearance requirements.
  * Returns 'Yes' if clearance is required/mentioned, 'No' otherwise.
  */
-export function detectSecurityClearance(text: string): 'Yes' | 'No' {
-    if (!text) return 'No'
+export function detectSecurityClearance(text: string): 'Yes' | 'No' | 'N/A' {
+    if (!text) return 'N/A'
+    if (/(?:no|not|without).{0,25}(?:security )?clearance/i.test(text)) return 'No'
     for (const pattern of SECURITY_CLEARANCE_PATTERNS) {
         if (pattern.test(text)) return 'Yes'
     }
-    return 'No'
+    return 'N/A'
 }
 
 // ─── H1B Sponsorship Detection ───────────────────────────────────────────────
@@ -355,12 +393,13 @@ export function extractPayRange(text: string): string {
 export function determineLocationType(
     locationText: string,
     descriptionText?: string
-): 'Remote' | 'Hybrid' | 'Onsite' {
+): 'Remote' | 'Hybrid' | 'Onsite' | null {
     const combined = `${locationText} ${descriptionText || ''}`.toLowerCase()
     if (combined.includes('remote') && combined.includes('hybrid')) return 'Hybrid'
     if (combined.includes('remote')) return 'Remote'
     if (combined.includes('hybrid')) return 'Hybrid'
-    return 'Onsite'
+    if (/\bon[- ]?site\b|\bin[- ]?office\b|\bin person\b/i.test(combined)) return 'Onsite'
+    return null
 }
 
 /**
@@ -368,12 +407,13 @@ export function determineLocationType(
  */
 export function determineEmploymentType(
     text: string
-): 'Full-time' | 'Part-time' | 'Contract' | 'Internship' {
+): 'Full-time' | 'Part-time' | 'Contract' | 'Internship' | null {
     const lower = text.toLowerCase()
     if (lower.includes('intern')) return 'Internship'
     if (lower.includes('contract') || lower.includes('temp')) return 'Contract'
     if (lower.includes('part-time') || lower.includes('part time')) return 'Part-time'
-    return 'Full-time'
+    if (lower.includes('full-time') || lower.includes('full time')) return 'Full-time'
+    return null
 }
 
 // ─── Department Normalization ────────────────────────────────────────────
@@ -479,13 +519,11 @@ export async function getCompany(companyName: string): Promise<CompanyRecord> {
         .maybeSingle()
 
     if (error) {
-        console.error(`❌ Error fetching company "${companyName}":`, error)
-        process.exit(1)
+        throw new Error(`Could not fetch company "${companyName}": ${error.message}`)
     }
 
     if (!data) {
-        console.error(`❌ Company "${companyName}" not found in the database.`)
-        process.exit(1)
+        throw new Error(`Company "${companyName}" not found in the database.`)
     }
 
     return data as CompanyRecord
@@ -494,6 +532,8 @@ export async function getCompany(companyName: string): Promise<CompanyRecord> {
 /**
  * Upsert jobs in batches using external_job_id for deduplication.
  */
+let activeScrapeCounters: { eligible: number; written: number } | null = null
+
 export async function upsertJobsBatch(
     jobs: DbJob[],
     batchSize = 50,
@@ -504,44 +544,60 @@ export async function upsertJobsBatch(
 
     for (let i = 0; i < jobs.length; i += batchSize) {
         const batch = jobs.slice(i, i + batchSize)
+        const externalIds = batch.map(j => j.external_job_id)
+        const { data: existingRows, error: lookupError } = await supabase
+            .from('jobs')
+            .select([
+                'external_job_id',
+                'posted_date',
+                'source_content_hash',
+                'ai_enrichment_status',
+                'ai_enrichment_model',
+                'ai_enriched_at',
+                'ai_enrichment_error',
+                'ai_enrichment_attempts',
+                'title',
+                'location_type',
+                'department',
+                'employment_type',
+                'description',
+                'summary',
+                'required_qualifications',
+                'preferred_qualifications',
+                'pay_range',
+                'security_clearance',
+                'h1b_sponsorship',
+            ].join(', '))
+            .in('external_job_id', externalIds)
+        if (lookupError) throw new Error(`Could not load existing jobs: ${lookupError.message}`)
 
-        // When preservePostedDate=true (e.g. Meta, Intuit), keep the original
-        // posted_date for jobs we've seen before — only truly new jobs get today's date.
-        // Also checks inactive (soft-deleted) jobs to prevent zombie re-insertion:
-        // if a job was deactivated with an old date, restore that old date so it
-        // stays old and gets deactivated again, never reappearing as "new".
-        if (preservePostedDate) {
-            const externalIds = batch.map(j => j.external_job_id)
-            // Check both active AND inactive jobs for existing dates
-            const { data: existing } = await supabase
-                .from('jobs')
-                .select('external_job_id, posted_date, is_active')
-                .in('external_job_id', externalIds)
-                .not('posted_date', 'is', null)
+        const existingRecords = (existingRows || []) as unknown as ExistingAiJobRecord[]
+        const existingByExternalId = new Map(
+            existingRecords.map(row => [row.external_job_id, row])
+        )
 
-            const existingDates = new Map(
-                (existing || []).map(r => [r.external_job_id, r.posted_date as string])
-            )
-            for (const job of batch) {
-                const saved = existingDates.get(job.external_job_id)
-                if (saved) job.posted_date = saved
-                // Ensure re-upserted jobs are marked active
-                job.is_active = true
-            }
-        }
+        const preparedBatch = batch.map(job => prepareJobForAiUpsert(
+            job,
+            existingByExternalId.get(job.external_job_id) || null,
+            { preservePostedDate },
+        ))
 
         const { error } = await supabase
             .from('jobs')
-            .upsert(batch, {
+            .upsert(preparedBatch, {
                 onConflict: 'external_job_id',
                 ignoreDuplicates: false,
             })
 
         if (error) {
-            console.error(`   ❌ Batch ${batchNum} error:`, error.message)
+            throw new Error(`Could not upsert batch ${batchNum}: ${error.message}`)
         } else {
-            totalUpserted += batch.length
-            console.log(`   📦 Batch ${batchNum}: ${batch.length} upserted (${totalUpserted}/${jobs.length})`)
+            totalUpserted += preparedBatch.length
+            if (activeScrapeCounters) {
+                activeScrapeCounters.eligible += preparedBatch.length
+                activeScrapeCounters.written += preparedBatch.length
+            }
+            console.log(`   📦 Batch ${batchNum}: ${preparedBatch.length} upserted (${totalUpserted}/${jobs.length})`)
         }
         batchNum++
     }
@@ -553,12 +609,13 @@ export async function upsertJobsBatch(
  * Get total job count for a company.
  */
 export async function getCompanyJobCount(companyId: number): Promise<number> {
-    const { count } = await supabase
+    const { count, error } = await supabase
         .from('jobs')
         .select('*', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .eq('is_active', true)
 
+    if (error) throw new Error(`Could not count jobs for company ${companyId}: ${error.message}`)
     return count || 0
 }
 
@@ -579,12 +636,12 @@ export function logSummary(companyName: string, collected: number, upserted: num
 // ─── Job Lifecycle Cleanup ───────────────────────────────────────────────────
 
 /**
- * Delete jobs older than N days based on posted_date.
+ * Deactivate jobs older than N days based on posted_date.
  * Called automatically by withScraperRun before each scraper execution.
  */
 export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
     const cutoffDate = new Date()
-    cutoffDate.setDate(cutoffDate.getDate() - retentionDays)
+    cutoffDate.setUTCDate(cutoffDate.getUTCDate() - (retentionDays - 1))
     const cutoff = cutoffDate.toISOString().split('T')[0]
 
     // Soft-delete: mark as inactive instead of hard-deleting.
@@ -593,13 +650,12 @@ export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
     // and restore the original old date, so the job won't reappear as "new".
     const { error, count } = await supabase
         .from('jobs')
-        .update({ is_active: false })
+        .update({ is_active: false }, { count: 'exact' })
         .eq('is_active', true)
         .lt('posted_date', cutoff)
 
     if (error) {
-        console.warn(`⚠️ Could not cleanup old jobs: ${error.message}`)
-        return 0
+        throw new Error(`Could not deactivate old jobs: ${error.message}`)
     }
 
     const deactivated = count || 0
@@ -625,8 +681,7 @@ export async function purgeInactiveJobs(retentionDays = 180): Promise<number> {
         .lt('updated_at', cutoff)
 
     if (error) {
-        console.warn(`⚠️ Could not purge inactive jobs: ${error.message}`)
-        return 0
+        throw new Error(`Could not purge inactive jobs: ${error.message}`)
     }
 
     const purged = count || 0
@@ -636,79 +691,58 @@ export async function purgeInactiveJobs(retentionDays = 180): Promise<number> {
     return purged
 }
 
-// ─── Scraper Run Persistence ─────────────────────────────────────────────────
-
-/**
- * Persist a scraper run status to the database.
- */
-export async function persistScraperRun(args: {
-    companyName: string
-    status: 'Successful' | 'Error' | 'Partial'
-    startedAt: Date
-    completedAt: Date
-    durationSeconds: number
-    errorMessage?: string | null
-}) {
-    const row = {
-        company_name: args.companyName,
-        status: args.status,
-        started_at: args.startedAt.toISOString(),
-        completed_at: args.completedAt.toISOString(),
-        duration_seconds: args.durationSeconds,
-        error_message: args.errorMessage || null,
-    }
-
-    // Delete existing row for this company, then insert new one
-    // This avoids dependency on unique constraint existing
-    await supabase
-        .from('scraper_runs')
-        .delete()
-        .eq('company_name', args.companyName)
-
-    const { error } = await supabase
-        .from('scraper_runs')
-        .insert(row)
-
-    if (error) {
-        console.warn(`⚠️ Could not persist run status for ${args.companyName}: ${error.message}`)
-    }
-}
-
 /**
  * Wrap a scraper's main function to automatically track and persist run status.
  * Usage: withScraperRun('Google', async () => { ... })
  */
 export async function withScraperRun(companyName: string, fn: () => Promise<void>): Promise<void> {
-    // Cleanup jobs older than 14 days before running
-    await cleanupOldJobs(14)
-
+    const managed = process.env.SCRAPER_MANAGED_RUN === '1'
+    let lease: string | null = null
+    if (!managed) {
+        const { data, error } = await supabase.rpc('claim_scraper_lease', { p_company: companyName, p_seconds: 900 })
+        if (error) throw error
+        if (!data) throw new Error(`Another run owns the scraper lease for ${companyName}`)
+        lease = data
+    }
+    activeScrapeCounters = { eligible: 0, written: 0 }
+    resetSourceFailures()
     const startedAt = new Date()
+    let finished = false
     try {
+        if (!managed) await cleanupOldJobs(14)
         await fn()
-        const completedAt = new Date()
-        const durationSeconds = Math.round((completedAt.getTime() - startedAt.getTime()) / 1000)
-        await persistScraperRun({
-            companyName,
-            status: 'Successful',
-            startedAt,
-            completedAt,
-            durationSeconds,
-        })
-        console.log(`📡 Scraper status persisted: ${companyName} → Successful (${durationSeconds}s)`)
+        const sourceFailures = getSourceFailures()
+        if (!managed) {
+            const { data, error } = await supabase.rpc('finish_scraper_lease', {
+                p_company: companyName, p_token: lease!, p_run_group: `direct-${startedAt.getTime()}`,
+                p_status: sourceFailures.length ? 'Partial' : 'Successful', p_started_at: startedAt.toISOString(),
+                p_completed_at: new Date().toISOString(), p_error: sourceFailures.join('; ') || null,
+            })
+            if (error) throw error
+            if (!data) throw new Error(`Lost scraper lease for ${companyName}`)
+            finished = true
+        }
+        console.log(`SCRAPE_RESULT_JSON:${JSON.stringify({ company: companyName, fetched: null,
+            eligible: activeScrapeCounters.eligible, written: activeScrapeCounters.written,
+            rejected: null, complete: sourceFailures.length === 0, errors: sourceFailures })}`)
     } catch (err) {
-        const completedAt = new Date()
-        const durationSeconds = Math.round((completedAt.getTime() - startedAt.getTime()) / 1000)
         const errorMessage = err instanceof Error ? err.message : String(err)
-        await persistScraperRun({
-            companyName,
-            status: 'Error',
-            startedAt,
-            completedAt,
-            durationSeconds,
-            errorMessage,
-        })
-        console.log(`📡 Scraper status persisted: ${companyName} → Error (${durationSeconds}s)`)
+        const errors = [...new Set([...getSourceFailures(), errorMessage])]
+        console.log(`SCRAPE_RESULT_JSON:${JSON.stringify({ company: companyName, fetched: null,
+            eligible: activeScrapeCounters.eligible, written: activeScrapeCounters.written,
+            rejected: null, complete: false, errors })}`)
+        if (!managed && !finished && lease) {
+            const { error } = await supabase.rpc('finish_scraper_lease', {
+                p_company: companyName, p_token: lease, p_run_group: `direct-${startedAt.getTime()}`,
+                p_status: activeScrapeCounters.written > 0 ? 'Partial' : 'Error',
+                p_started_at: startedAt.toISOString(), p_completed_at: new Date().toISOString(),
+                p_error: errorMessage,
+            })
+            if (error) console.error(`Could not persist ${companyName} status:`, error)
+        }
         throw err
+    } finally {
+        activeScrapeCounters = null
     }
 }
 
@@ -877,5 +911,7 @@ export async function launchBrowser(options?: {
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         viewport: options?.viewport ?? { width: 1280, height: 900 },
     })
+    context.setDefaultTimeout(30000)
+    context.setDefaultNavigationTimeout(45000)
     return { browser, context }
 }

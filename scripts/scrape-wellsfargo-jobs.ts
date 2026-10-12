@@ -1,3 +1,4 @@
+import { navigateSource } from '../lib/modules/ingestion/browser'
 /**
  * Wells Fargo Jobs Scraper
  *
@@ -8,7 +9,7 @@
  * Strategy: Collect job URLs from list pages, then batch-fetch detail pages
  * for posted dates and full descriptions. Only keep jobs within 14 days.
  *
- * Usage: npx tsx scripts/scrape-wellsfargo-jobs.ts
+ * Usage: pnpm exec tsx scripts/scrape-wellsfargo-jobs.ts
  */
 
 import { BrowserContext, chromium } from 'playwright'
@@ -44,7 +45,7 @@ type DetailData = {
 async function fetchWFDetail(context: BrowserContext, jobUrl: string): Promise<DetailData | null> {
     const page = await context.newPage()
     try {
-        await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
         await sleep(randomDelay(2000, 4000))
 
         return await page.evaluate(() => {
@@ -114,7 +115,7 @@ async function scrapeWellsFargoJobs() {
 
             console.log(`📄 Page ${pageNum}...`)
             const page = await context.newPage()
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
+            await navigateSource(page, url, { waitUntil: 'domcontentloaded', timeout: 60000 })
             await sleep(randomDelay(3000, 6000))
 
             const links = await page.evaluate(() => {
