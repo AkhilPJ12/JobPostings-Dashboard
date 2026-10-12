@@ -1,5 +1,7 @@
 # JobPostings Dashboard
 
+[Live dashboard](https://job-postings-dashboard.vercel.app/)
+
 A Next.js and Supabase dashboard that collects recent public job postings from 26 companies. The dashboard reads paged public projections. Company scrapers save source data; a separate Ollama Cloud worker may add validated summaries and extracted facts.
 
 ## Architecture
