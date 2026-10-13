@@ -644,21 +644,25 @@ export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
     cutoffDate.setUTCDate(cutoffDate.getUTCDate() - (retentionDays - 1))
     const cutoff = cutoffDate.toISOString().split('T')[0]
 
-    // Soft-delete: mark as inactive instead of hard-deleting.
-    // This prevents zombie re-insertion for no-date companies (Meta, Intuit, etc.)
-    // whose scrapers use preservePostedDate — they can check inactive rows
-    // and restore the original old date, so the job won't reappear as "new".
-    const { error, count } = await supabase
-        .from('jobs')
-        .update({ is_active: false }, { count: 'exact' })
-        .eq('is_active', true)
-        .lt('posted_date', cutoff)
+    // Keep each write below the database statement deadline. The identity
+    // table retains first-seen dates when old content is eventually purged.
+    let deactivated = 0
+    while (true) {
+        const { data, error: selectError } = await supabase
+            .from('jobs').select('id').eq('is_active', true)
+            .lt('posted_date', cutoff).order('id').limit(50)
+        if (selectError) throw new Error(`Could not list old jobs: ${selectError.message}`)
+        if (!data?.length) break
 
-    if (error) {
-        throw new Error(`Could not deactivate old jobs: ${error.message}`)
+        const { error, count } = await supabase
+            .from('jobs')
+            .update({ is_active: false }, { count: 'exact' })
+            .in('id', data.map(job => job.id))
+            .eq('is_active', true).lt('posted_date', cutoff)
+        if (error) throw new Error(`Could not deactivate old jobs: ${error.message}`)
+        if (!count) throw new Error('Could not deactivate old jobs: selected rows were not updated')
+        deactivated += count
     }
-
-    const deactivated = count || 0
     if (deactivated > 0) {
         console.log(`🧹 Deactivated ${deactivated} jobs older than ${retentionDays} days (before ${cutoff})`)
     }
@@ -674,17 +678,22 @@ export async function purgeInactiveJobs(retentionDays = 180): Promise<number> {
     cutoffDate.setDate(cutoffDate.getDate() - retentionDays)
     const cutoff = cutoffDate.toISOString()
 
-    const { error, count } = await supabase
-        .from('jobs')
-        .delete({ count: 'exact' })
-        .eq('is_active', false)
-        .lt('updated_at', cutoff)
+    let purged = 0
+    while (true) {
+        const { data, error: selectError } = await supabase
+            .from('jobs').select('id').eq('is_active', false)
+            .lt('updated_at', cutoff).order('id').limit(50)
+        if (selectError) throw new Error(`Could not list inactive jobs: ${selectError.message}`)
+        if (!data?.length) break
 
-    if (error) {
-        throw new Error(`Could not purge inactive jobs: ${error.message}`)
+        const { error, count } = await supabase
+            .from('jobs').delete({ count: 'exact' })
+            .in('id', data.map(job => job.id))
+            .eq('is_active', false).lt('updated_at', cutoff)
+        if (error) throw new Error(`Could not purge inactive jobs: ${error.message}`)
+        if (!count) throw new Error('Could not purge inactive jobs: selected rows were not deleted')
+        purged += count
     }
-
-    const purged = count || 0
     if (purged > 0) {
         console.log(`🗑️ Purged ${purged} inactive jobs older than ${retentionDays} days`)
     }
