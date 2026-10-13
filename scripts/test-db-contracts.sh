@@ -12,6 +12,7 @@ psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f scripts/sql/2026-10-10-arc
 psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f scripts/sql/2026-10-11-source-provenance.sql
 psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f scripts/sql/2026-10-12-source-summary.sql
 psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f scripts/sql/2026-10-13-inactive-retention.sql
+psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f scripts/sql/2026-10-14-enrichment-health.sql
 psql "$TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f __tests__/db/contracts.sql
 
 # Two separate clients must never claim the same queued source version.

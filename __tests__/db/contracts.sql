@@ -58,6 +58,9 @@ begin
     raise exception 'AI claim is not exclusive';
   end if;
   update public.jobs set source_content_hash = 'hash-two' where external_job_id = 'amazon_1';
+  if (public.get_public_enrichment_health()->>'pending')::integer <> 1 then
+    raise exception 'superseded queue version inflated pending health';
+  end if;
   if public.finish_ai_enrichment((q->>'queue_id')::bigint,(q->>'lease_token')::uuid,
     '{"summary":"Stale"}',10,1,1) then
     raise exception 'stale AI result was accepted';

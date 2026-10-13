@@ -25,7 +25,6 @@ const CONFIG = {
     companyName: 'Google',
     dateWindowDays: 14,
     maxPages: 150,
-    maxPagesNoDate: 20,
 }
 
 type ExtractedJob = {
@@ -252,7 +251,7 @@ async function _runGoogleUrl(baseUrl: string, pages: number, requireDate: boolea
             }
 
             if (requireDate && !hasAnyPostedDate && pageNum >= 3) {
-                return { hasDate: false, jobs: [] as ExtractedJob[] }
+                return { hasDate: false, jobs: collected }
             }
 
             if (newUniqueThisPage === 0) {
@@ -279,6 +278,7 @@ async function _runGoogleUrl(baseUrl: string, pages: number, requireDate: boolea
 async function fetchGoogleDetailDate(jobUrl: string): Promise<string | null> {
     try {
         const resp = await fetch(jobUrl, {
+            signal: AbortSignal.timeout(10000),
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'text/html',
@@ -321,42 +321,37 @@ async function scrapeGoogleJobs() {
     if (!result.hasDate) {
         console.log('⚠️ No posting date in primary jobs.')
         if (fallbackUrl) {
-            sourceUrl = fallbackUrl
             const second = await runGoogleUrl(fallbackUrl, CONFIG.maxPages, true)
             if (second.hasDate) {
                 console.log('✅ Using secondary URL with posting dates.')
+                sourceUrl = fallbackUrl
                 result = second
             }
         }
         if (!result.hasDate) {
-            console.log('⚠️ No list posting dates. Checking detail dates from the first 20 primary pages.')
-            noteSourceFailure('Google listing dates unavailable; detail-date scan is limited to 20 pages')
-            sourceUrl = primaryUrl
-            result = await runGoogleUrl(primaryUrl, CONFIG.maxPagesNoDate, false)
+            console.log('⚠️ No list posting dates. Publishing source listings with first-seen provenance.')
+            noteSourceFailure('Google listing dates unavailable; scan ended after the first three pages')
         }
     }
 
     const collectedJobs: DbJob[] = []
     let detailFetched = 0
+    let detailDateAttempts = 0
     for (const j of result.jobs) {
-        if (Date.now() >= deadline) {
-            noteSourceFailure('Google stopped before the source deadline; listing details are incomplete')
-            break
-        }
         let postedDate = parsePostedDate(j.dateText || looksLikeDate(j.text))
 
         // If no date from list page, try fetching the detail page JSON-LD
-        if (!postedDate && j.url) {
+        if (!postedDate && j.url && detailDateAttempts < 10 && Date.now() < deadline - 120000) {
+            detailDateAttempts++
             postedDate = await fetchGoogleDetailDate(j.url)
             if (postedDate) detailFetched++
-            await sleep(randomDelay(300, 700))
         }
 
-        if (!postedDate || !isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
+        if (postedDate && !isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
             continue
         }
 
-        const finalPostedDate = postedDate
+        const finalPostedDate = postedDate || new Date().toISOString().slice(0, 10)
         const job: DbJob = {
             company_id: company.id,
             external_job_id: `google_${j.id}`,
@@ -366,6 +361,7 @@ async function scrapeGoogleJobs() {
             department: normalizeDepartment('General', j.title),
             employment_type: determineEmploymentType(j.title),
             posted_date: finalPostedDate,
+            sourceDateProvenance: postedDate ? 'source' : 'first_seen',
             description: cleanHtml(j.text),
             summary: `${j.title} at Google - ${j.location}`,
             required_qualifications: [],
@@ -381,10 +377,12 @@ async function scrapeGoogleJobs() {
 
     console.log(`📊 Total jobs collected (Phase 1): ${collectedJobs.length}`)
     if (collectedJobs.length === 0) {
-        if (result.jobs.length > 0) noteSourceFailure('Google listings had no verifiable posting dates')
         console.log('⚠️  No jobs found.')
         return
     }
+
+    // Publish source listings now; detail-page failures must not hide them.
+    const upsertedCount = await upsertJobsBatch(collectedJobs)
 
     // Phase 2: Enrich each job by visiting its detail page
     console.log(`\n📝 Phase 2: Enriching ${collectedJobs.length} jobs with detail content...`)
@@ -419,9 +417,12 @@ async function scrapeGoogleJobs() {
             if (pageText.length > 100) {
                 const detail = parseGoogleDetailText(pageText)
 
-                // About the Job → summary
+                // About the Job is a dedicated company-authored source summary.
                 if (detail.aboutTheJob) {
                     job.summary = detail.aboutTheJob
+                    job.structuredSourceFields = {
+                        ...job.structuredSourceFields, summary: detail.aboutTheJob,
+                    }
                 }
 
                 // Responsibilities → description (bullet points)
@@ -437,9 +438,15 @@ async function scrapeGoogleJobs() {
                 // Qualifications
                 if (detail.minQualifications.length > 0) {
                     job.required_qualifications = detail.minQualifications
+                    job.structuredSourceFields = {
+                        ...job.structuredSourceFields, required_qualifications: detail.minQualifications,
+                    }
                 }
                 if (detail.prefQualifications.length > 0) {
                     job.preferred_qualifications = detail.prefQualifications
+                    job.structuredSourceFields = {
+                        ...job.structuredSourceFields, preferred_qualifications: detail.prefQualifications,
+                    }
                 }
 
                 // Pay range
@@ -468,10 +475,10 @@ async function scrapeGoogleJobs() {
 
     await browser.close()
     console.log(`   ✅ Enrichment complete: ${enriched} enriched, ${failed} failed out of ${collectedJobs.length}`)
+    if (failed > 0) noteSourceFailure(`Google detail content unavailable for ${failed} listings`)
 
     console.log(`   📅 ${detailFetched} jobs got date from detail page fetch`)
-    console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs...`)
-    const upsertedCount = await upsertJobsBatch(collectedJobs)
+    if (enriched > 0) await upsertJobsBatch(collectedJobs)
     const dbCount = await getCompanyJobCount(company.id)
     logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, sourceUrl)
 }
