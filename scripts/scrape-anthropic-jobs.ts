@@ -56,8 +56,8 @@ async function scrapeAnthropicJobs() {
     let dateSkipped = 0, locationSkipped = 0
 
     for (const j of data.jobs || []) {
-        const rawDate = j.first_published || j.updated_at
-        const postedDate = rawDate ? rawDate.slice(0, 10) : null
+        const sourcePostedDate = j.first_published ? j.first_published.slice(0, 10) : null
+        const postedDate = sourcePostedDate || new Date().toISOString().slice(0, 10)
 
         if (!postedDate || !isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
             dateSkipped++; continue
@@ -85,6 +85,7 @@ async function scrapeAnthropicJobs() {
             department: normalizeDepartment(department, j.title),
             employment_type: determineEmploymentType(j.title),
             posted_date: postedDate,
+            sourceDateProvenance: sourcePostedDate ? 'source' : 'first_seen',
             description: contentText || `${j.title} at Anthropic - ${fullLocation}`,
             summary: truncateField(`${j.title} at Anthropic - ${fullLocation}`),
             required_qualifications: quals.required,

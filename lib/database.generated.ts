@@ -225,6 +225,7 @@ export type Database = {
           first_seen_at: string;
           h1b_sponsorship: string | null;
           id: number;
+          inactive_since_at: string | null;
           is_active: boolean;
           job_url: string | null;
           last_seen_at: string;
@@ -265,6 +266,7 @@ export type Database = {
           first_seen_at?: string;
           h1b_sponsorship?: string | null;
           id?: never;
+          inactive_since_at?: string | null;
           is_active?: boolean;
           job_url?: string | null;
           last_seen_at?: string;
@@ -304,6 +306,7 @@ export type Database = {
           first_seen_at?: string;
           h1b_sponsorship?: string | null;
           id?: never;
+          inactive_since_at?: string | null;
           is_active?: boolean;
           job_url?: string | null;
           last_seen_at?: string;

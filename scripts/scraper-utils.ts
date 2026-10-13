@@ -85,6 +85,7 @@ export interface DbJob {
     ai_enriched_at?: string | null
     ai_enrichment_error?: string | null
     ai_enrichment_attempts?: number
+    sourceDateProvenance?: 'source' | 'first_seen'
     structuredSourceFields?: StructuredSourceFields
     sourceHints?: Record<string, string>
 }
@@ -576,11 +577,31 @@ export async function upsertJobsBatch(
             existingRecords.map(row => [row.external_job_id, row])
         )
 
-        const preparedBatch = batch.map(job => prepareJobForAiUpsert(
-            job,
+        const firstSeenIds = batch.filter(job =>
+            (preservePostedDate || job.sourceDateProvenance === 'first_seen') &&
+            !existingByExternalId.has(job.external_job_id)).map(job => job.external_job_id)
+        const identityDates = new Map<string, string>()
+        if (firstSeenIds.length) {
+            const { data: identities, error: identityError } = await supabase
+                .from('job_source_identities').select('external_job_id,first_seen_at')
+                .in('external_job_id', firstSeenIds)
+            if (identityError) throw new Error(`Could not load first-seen identities: ${identityError.message}`)
+            for (const identity of identities || []) {
+                identityDates.set(identity.external_job_id, identity.first_seen_at.slice(0, 10))
+            }
+        }
+        const preparedBatch = batch.map(job => prepareJobForAiUpsert(job,
             existingByExternalId.get(job.external_job_id) || null,
-            { preservePostedDate },
-        ))
+            { preservePostedDate, firstSeenDate: identityDates.get(job.external_job_id) }))
+            // Once purged, an old undated posting should remain only as a
+            // minimal identity record, even if the source still lists it.
+            .filter(job => job.is_active || existingByExternalId.has(job.external_job_id))
+
+        if (!preparedBatch.length) {
+            console.log(`   📦 Batch ${batchNum}: all ${batch.length} postings are outside the browse window`)
+            batchNum++
+            continue
+        }
 
         const { error } = await supabase
             .from('jobs')
@@ -636,13 +657,15 @@ export function logSummary(companyName: string, collected: number, upserted: num
 // ─── Job Lifecycle Cleanup ───────────────────────────────────────────────────
 
 /**
- * Deactivate jobs older than N days based on posted_date.
- * Called automatically by withScraperRun before each scraper execution.
+ * Deactivate jobs outside the shared public eligibility window.
+ * Scheduled orchestration calls this once per run group.
  */
 export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
     const cutoffDate = new Date()
     cutoffDate.setUTCDate(cutoffDate.getUTCDate() - (retentionDays - 1))
     const cutoff = cutoffDate.toISOString().split('T')[0]
+    const today = new Date().toISOString().split('T')[0]
+    const ineligible = `posted_date.lt.${cutoff},posted_date.gt.${today},posted_date.is.null,end_date.lt.${today}`
 
     // Keep each write below the database statement deadline. The identity
     // table retains first-seen dates when old content is eventually purged.
@@ -650,7 +673,7 @@ export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
     while (true) {
         const { data, error: selectError } = await supabase
             .from('jobs').select('id').eq('is_active', true)
-            .lt('posted_date', cutoff).order('id').limit(50)
+            .or(ineligible).order('id').limit(50)
         if (selectError) throw new Error(`Could not list old jobs: ${selectError.message}`)
         if (!data?.length) break
 
@@ -658,13 +681,13 @@ export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
             .from('jobs')
             .update({ is_active: false }, { count: 'exact' })
             .in('id', data.map(job => job.id))
-            .eq('is_active', true).lt('posted_date', cutoff)
+            .eq('is_active', true).or(ineligible)
         if (error) throw new Error(`Could not deactivate old jobs: ${error.message}`)
         if (!count) throw new Error('Could not deactivate old jobs: selected rows were not updated')
         deactivated += count
     }
     if (deactivated > 0) {
-        console.log(`🧹 Deactivated ${deactivated} jobs older than ${retentionDays} days (before ${cutoff})`)
+        console.log(`🧹 Deactivated ${deactivated} jobs outside the ${retentionDays}-day eligibility window`)
     }
     return deactivated
 }
@@ -675,21 +698,34 @@ export async function cleanupOldJobs(retentionDays = 14): Promise<number> {
  */
 export async function purgeInactiveJobs(retentionDays = 180): Promise<number> {
     const cutoffDate = new Date()
-    cutoffDate.setDate(cutoffDate.getDate() - retentionDays)
+    cutoffDate.setUTCDate(cutoffDate.getUTCDate() - retentionDays)
     const cutoff = cutoffDate.toISOString()
+
+    // During an additive rollout, scheduled workers may deploy before the
+    // database migration is applied. Keep maintenance running with the old
+    // criterion until inactive_since_at exists, and make the gap visible.
+    let retentionColumn: 'inactive_since_at' | 'updated_at' = 'inactive_since_at'
+    const { error: columnError } = await supabase.from('jobs').select('inactive_since_at').limit(1)
+    if (columnError) {
+        if (columnError.code !== '42703' && columnError.code !== 'PGRST204') {
+            throw new Error(`Could not check inactive retention schema: ${columnError.message}`)
+        }
+        retentionColumn = 'updated_at'
+        console.warn('Inactive retention migration is pending; using updated_at until it is applied')
+    }
 
     let purged = 0
     while (true) {
         const { data, error: selectError } = await supabase
             .from('jobs').select('id').eq('is_active', false)
-            .lt('updated_at', cutoff).order('id').limit(50)
+            .lt(retentionColumn, cutoff).order('id').limit(50)
         if (selectError) throw new Error(`Could not list inactive jobs: ${selectError.message}`)
         if (!data?.length) break
 
         const { error, count } = await supabase
             .from('jobs').delete({ count: 'exact' })
             .in('id', data.map(job => job.id))
-            .eq('is_active', false).lt('updated_at', cutoff)
+            .eq('is_active', false).lt(retentionColumn, cutoff)
         if (error) throw new Error(`Could not purge inactive jobs: ${error.message}`)
         if (!count) throw new Error('Could not purge inactive jobs: selected rows were not deleted')
         purged += count

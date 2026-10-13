@@ -45,6 +45,7 @@ export interface AiUpsertJob {
     ai_enrichment_error?: string | null
     ai_enrichment_attempts?: number
     date_provenance?: 'source' | 'first_seen' | 'legacy_unknown'
+    sourceDateProvenance?: 'source' | 'first_seen'
     source_field_provenance?: Record<string, string>
     structuredSourceFields?: StructuredSourceFields
     sourceHints?: Record<string, string>
@@ -109,9 +110,10 @@ export function createSourceContentHash(payload: Json): string {
 export function prepareJobForAiUpsert(
     job: AiUpsertJob,
     existing?: ExistingAiJobRecord | null,
-    options: { preservePostedDate?: boolean } = {},
+    options: { preservePostedDate?: boolean; firstSeenDate?: string } = {},
 ): AiUpsertJob {
-    const { structuredSourceFields = {}, sourceHints = {}, ...sourceJob } = job
+    const { structuredSourceFields = {}, sourceHints = {}, sourceDateProvenance, ...sourceJob } = job
+    const useFirstSeenDate = options.preservePostedDate || sourceDateProvenance === 'first_seen'
     const provenance = Object.fromEntries(Object.entries(structuredSourceFields)
         .filter(([, value]) => value != null && value !== '' && value !== 'N/A' && value !== 'Not specified' &&
             (!Array.isArray(value) || value.length > 0))
@@ -131,8 +133,9 @@ export function prepareJobForAiUpsert(
         source_field_provenance: provenance,
         structuredSourceFields,
         sourceHints,
-        posted_date: options.preservePostedDate && existing?.posted_date ? existing.posted_date : job.posted_date,
-        date_provenance: options.preservePostedDate ? 'first_seen' : 'source',
+        posted_date: useFirstSeenDate
+            ? existing?.posted_date || options.firstSeenDate || job.posted_date : job.posted_date,
+        date_provenance: useFirstSeenDate ? 'first_seen' : 'source',
         is_active: true,
     }
 

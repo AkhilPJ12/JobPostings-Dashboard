@@ -1,6 +1,6 @@
 -- Run after all three migration files in a disposable PostgreSQL database.
 do $$
-declare token uuid; second_token uuid; q jsonb; current_hash text;
+declare token uuid; second_token uuid; q jsonb; current_hash text; inactive_since timestamptz;
 begin
   if pg_catalog.has_table_privilege('anon','public.jobs','select') then
     raise exception 'anon can still read source jobs';
@@ -15,6 +15,9 @@ begin
   end if;
   if pg_catalog.has_function_privilege('anon','public.claim_ai_enrichment(text,integer,text,text)','execute') then
     raise exception 'anon can claim AI work';
+  end if;
+  if pg_catalog.has_function_privilege('anon','public.set_job_inactive_since()','execute') then
+    raise exception 'anon can execute inactive retention trigger';
   end if;
   if (public.search_jobs('{}'::jsonb)->>'total')::integer <> 1 then
     raise exception 'public search count is wrong';
@@ -126,6 +129,13 @@ begin
   values(2,'meta_old','Old Role',current_date,'first_seen','old-source');
   if exists(select 1 from public.jobs where external_job_id='meta_old' and is_active) then
     raise exception 'undated old job reactivated';
+  end if;
+  select inactive_since_at into inactive_since from public.jobs where external_job_id='meta_old';
+  if inactive_since is null then raise exception 'inactive date not recorded'; end if;
+  update public.jobs set source_content_hash='old-source-seen-again' where external_job_id='meta_old';
+  if (select inactive_since_at from public.jobs where external_job_id='meta_old')
+      is distinct from inactive_since then
+    raise exception 'repeated sighting reset inactive retention';
   end if;
 end $$;
 

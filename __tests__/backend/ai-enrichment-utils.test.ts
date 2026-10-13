@@ -46,6 +46,22 @@ describe('source preservation and Ollama validation', () => {
     expect(stale.date_provenance).toBe('first_seen')
   })
 
+  it('uses per-job first-seen provenance when an API only supplies an update timestamp', () => {
+    const prepared = prepareJobForAiUpsert({ ...source, sourceDateProvenance: 'first_seen' }, {
+      external_job_id: source.external_job_id, posted_date: '2020-01-01',
+      source_content_hash: null, ai_enrichment_status: null, ai_enrichment_model: null,
+      ai_enriched_at: null, ai_enrichment_error: null, ai_enrichment_attempts: 0,
+    })
+    expect(prepared.posted_date).toBe('2020-01-01')
+    expect(prepared.date_provenance).toBe('first_seen')
+    expect(prepared.is_active).toBe(false)
+    expect(prepared).not.toHaveProperty('sourceDateProvenance')
+    const purged = prepareJobForAiUpsert({ ...source, sourceDateProvenance: 'first_seen' }, null,
+      { firstSeenDate: '2020-01-01' })
+    expect(purged.posted_date).toBe('2020-01-01')
+    expect(purged.is_active).toBe(false)
+  })
+
   it('stores missing factual values as null in the normalized source snapshot', () => {
     const prepared = prepareJobForAiUpsert({ ...source, pay_range: 'Not specified',
       h1b_sponsorship: 'N/A', security_clearance: 'N/A', summary: '' })

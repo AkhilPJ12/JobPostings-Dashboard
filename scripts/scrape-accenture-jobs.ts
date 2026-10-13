@@ -46,7 +46,7 @@ type AccentureApiJob = {
     postedDateText?: string
 }
 
-function parseAccenturePostedDate(postedDateText: string | undefined, updateDate: string | undefined): string | null {
+function parseAccenturePostedDate(postedDateText: string | undefined): string | null {
     const raw = (postedDateText || '').trim()
     if (raw) {
         const today = /posted\s+today/i.test(raw)
@@ -71,7 +71,7 @@ function parseAccenturePostedDate(postedDateText: string | undefined, updateDate
         if (parsedAbsolute) return parsedAbsolute
     }
 
-    return parsePostedDate(updateDate || null)
+    return null
 }
 
 function toListLocation(value: string[] | string | undefined): string {
@@ -177,11 +177,8 @@ async function scrapeAccentureJobs() {
                 if (!reqId || seenIds.has(reqId)) continue
                 seenIds.add(reqId)
 
-                const postedDate = parseAccenturePostedDate(r.postedDateText, r.updateDate)
-                if (!postedDate) {
-                    dateSkipped++
-                    continue
-                }
+                const sourcePostedDate = parseAccenturePostedDate(r.postedDateText)
+                const postedDate = sourcePostedDate || new Date().toISOString().slice(0, 10)
                 if (!isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
                     dateSkipped++
                     continue
@@ -227,6 +224,7 @@ async function scrapeAccentureJobs() {
                     department: department.slice(0, 240),
                     employment_type: determineEmploymentType(`${r.employeeType || r.jobScheduleDescription || r.jobTypeDescription || ''} ${title}`),
                     posted_date: postedDate,
+                    sourceDateProvenance: sourcePostedDate ? 'source' : 'first_seen',
                     description: finalDescription,
                     summary: createSummary(description),
                     required_qualifications,

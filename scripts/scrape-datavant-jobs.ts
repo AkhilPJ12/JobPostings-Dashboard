@@ -61,9 +61,8 @@ async function scrapeDatevantJobs() {
     let locationSkipped = 0
 
     for (const j of data.jobs || []) {
-        // Use first_published as posted date, fall back to updated_at
-        const rawDate = j.first_published || j.updated_at
-        const postedDate = rawDate ? rawDate.slice(0, 10) : null
+        const sourcePostedDate = j.first_published ? j.first_published.slice(0, 10) : null
+        const postedDate = sourcePostedDate || new Date().toISOString().slice(0, 10)
 
         if (!postedDate || !isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
             dateSkipped++
@@ -93,6 +92,7 @@ async function scrapeDatevantJobs() {
             department: normalizeDepartment(department, j.title),
             employment_type: determineEmploymentType(j.title),
             posted_date: postedDate,
+            sourceDateProvenance: sourcePostedDate ? 'source' : 'first_seen',
             description: contentText || `${j.title} at Datavant - ${fullLocation}`,
             summary: `${j.title} at Datavant - ${fullLocation}`.slice(0, 250),
             required_qualifications: quals.required,
