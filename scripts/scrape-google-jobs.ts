@@ -18,7 +18,7 @@ import {
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
     normalizeDepartment,
-    sleep, randomDelay, withScraperRun,
+    sleep, randomDelay, withScraperRun, supabase,
 } from './scraper-utils'
 
 const CONFIG = {
@@ -381,8 +381,15 @@ async function scrapeGoogleJobs() {
         return
     }
 
-    // Publish source listings now; detail-page failures must not hide them.
-    const upsertedCount = await upsertJobsBatch(collectedJobs)
+    // Existing rows may already contain complete source detail. Publish only
+    // new listings here so a repeated scrape cannot temporarily replace that
+    // detail with a shorter list card and churn its source hash.
+    const { data: existingRows, error: existingError } = await supabase.from('jobs')
+        .select('external_job_id').in('external_job_id', collectedJobs.map(job => job.external_job_id))
+    if (existingError) throw existingError
+    const existingIds = new Set((existingRows || []).map(row => row.external_job_id))
+    const newJobs = collectedJobs.filter(job => !existingIds.has(job.external_job_id))
+    const sourceOnlyCount = newJobs.length ? await upsertJobsBatch(newJobs) : 0
 
     // Phase 2: Enrich each job by visiting its detail page
     console.log(`\n📝 Phase 2: Enriching ${collectedJobs.length} jobs with detail content...`)
@@ -394,6 +401,7 @@ async function scrapeGoogleJobs() {
     const detailPage = await context.newPage()
     let enriched = 0
     let failed = 0
+    const detailedJobs: DbJob[] = []
 
     for (let i = 0; i < collectedJobs.length; i++) {
         if (Date.now() >= deadline) {
@@ -460,6 +468,7 @@ async function scrapeGoogleJobs() {
                 job.h1b_sponsorship = detectH1BSponsorship(fullText)
                 job.location_type = determineLocationType(job.location, fullText)
 
+                detailedJobs.push(job)
                 enriched++
             } else {
                 failed++
@@ -478,7 +487,8 @@ async function scrapeGoogleJobs() {
     if (failed > 0) noteSourceFailure(`Google detail content unavailable for ${failed} listings`)
 
     console.log(`   📅 ${detailFetched} jobs got date from detail page fetch`)
-    if (enriched > 0) await upsertJobsBatch(collectedJobs)
+    const detailedCount = detailedJobs.length ? await upsertJobsBatch(detailedJobs) : 0
+    const upsertedCount = Math.max(sourceOnlyCount, detailedCount)
     const dbCount = await getCompanyJobCount(company.id)
     logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, sourceUrl)
 }

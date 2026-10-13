@@ -533,7 +533,11 @@ export async function getCompany(companyName: string): Promise<CompanyRecord> {
 /**
  * Upsert jobs in batches using external_job_id for deduplication.
  */
-let activeScrapeCounters: { eligible: number; written: number } | null = null
+let activeScrapeCounters: {
+    eligibleIds: Set<string>
+    writtenIds: Set<string>
+    rejectedIds: Set<string>
+} | null = null
 
 export async function upsertJobsBatch(
     jobs: DbJob[],
@@ -590,12 +594,20 @@ export async function upsertJobsBatch(
                 identityDates.set(identity.external_job_id, identity.first_seen_at.slice(0, 10))
             }
         }
-        const preparedBatch = batch.map(job => prepareJobForAiUpsert(job,
+        const normalizedBatch = batch.map(job => prepareJobForAiUpsert(job,
             existingByExternalId.get(job.external_job_id) || null,
             { preservePostedDate, firstSeenDate: identityDates.get(job.external_job_id) }))
+        const preparedBatch = normalizedBatch
             // Once purged, an old undated posting should remain only as a
             // minimal identity record, even if the source still lists it.
             .filter(job => job.is_active || existingByExternalId.has(job.external_job_id))
+        if (activeScrapeCounters) {
+            for (const job of normalizedBatch) {
+                if (job.is_active || existingByExternalId.has(job.external_job_id)) {
+                    activeScrapeCounters.eligibleIds.add(job.external_job_id)
+                } else activeScrapeCounters.rejectedIds.add(job.external_job_id)
+            }
+        }
 
         if (!preparedBatch.length) {
             console.log(`   📦 Batch ${batchNum}: all ${batch.length} postings are outside the browse window`)
@@ -615,8 +627,7 @@ export async function upsertJobsBatch(
         } else {
             totalUpserted += preparedBatch.length
             if (activeScrapeCounters) {
-                activeScrapeCounters.eligible += preparedBatch.length
-                activeScrapeCounters.written += preparedBatch.length
+                for (const job of preparedBatch) activeScrapeCounters.writtenIds.add(job.external_job_id)
             }
             console.log(`   📦 Batch ${batchNum}: ${preparedBatch.length} upserted (${totalUpserted}/${jobs.length})`)
         }
@@ -749,7 +760,7 @@ export async function withScraperRun(companyName: string, fn: () => Promise<void
         if (!data) throw new Error(`Another run owns the scraper lease for ${companyName}`)
         lease = data
     }
-    activeScrapeCounters = { eligible: 0, written: 0 }
+    activeScrapeCounters = { eligibleIds: new Set(), writtenIds: new Set(), rejectedIds: new Set() }
     resetSourceFailures()
     const startedAt = new Date()
     let finished = false
@@ -768,18 +779,18 @@ export async function withScraperRun(companyName: string, fn: () => Promise<void
             finished = true
         }
         console.log(`SCRAPE_RESULT_JSON:${JSON.stringify({ company: companyName, fetched: null,
-            eligible: activeScrapeCounters.eligible, written: activeScrapeCounters.written,
-            rejected: null, complete: sourceFailures.length === 0, errors: sourceFailures })}`)
+            eligible: activeScrapeCounters.eligibleIds.size, written: activeScrapeCounters.writtenIds.size,
+            rejected: activeScrapeCounters.rejectedIds.size, complete: sourceFailures.length === 0, errors: sourceFailures })}`)
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err)
         const errors = [...new Set([...getSourceFailures(), errorMessage])]
         console.log(`SCRAPE_RESULT_JSON:${JSON.stringify({ company: companyName, fetched: null,
-            eligible: activeScrapeCounters.eligible, written: activeScrapeCounters.written,
-            rejected: null, complete: false, errors })}`)
+            eligible: activeScrapeCounters.eligibleIds.size, written: activeScrapeCounters.writtenIds.size,
+            rejected: activeScrapeCounters.rejectedIds.size, complete: false, errors })}`)
         if (!managed && !finished && lease) {
             const { error } = await supabase.rpc('finish_scraper_lease', {
                 p_company: companyName, p_token: lease, p_run_group: `direct-${startedAt.getTime()}`,
-                p_status: activeScrapeCounters.written > 0 ? 'Partial' : 'Error',
+                p_status: activeScrapeCounters.writtenIds.size > 0 ? 'Partial' : 'Error',
                 p_started_at: startedAt.toISOString(), p_completed_at: new Date().toISOString(),
                 p_error: errorMessage,
             })
