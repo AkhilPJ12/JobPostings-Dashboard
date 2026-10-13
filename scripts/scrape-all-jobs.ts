@@ -68,7 +68,7 @@ async function runSource(source: RegisteredSource, runGroup: string) {
   }
   const { data: saved, error: finishError } = await supabase.rpc('finish_scraper_lease', {
     p_company: source.name, p_token: token as string, p_run_group: runGroup,
-    p_status: status, p_started_at: startedAt, p_completed_at: new Date().toISOString(), p_error: errorMessage,
+    p_status: status, p_started_at: startedAt, p_completed_at: new Date().toISOString(), p_error: errorMessage || '',
   })
   if (finishError) throw finishError
   if (!saved) throw new Error(`Lost run lease for ${source.name}`)

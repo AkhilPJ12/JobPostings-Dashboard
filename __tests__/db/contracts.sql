@@ -75,6 +75,15 @@ begin
       (public.get_public_job(1)->>'summary_generated')::boolean is not true then
     raise exception 'AI summary was not labeled or scraper excerpt hid it';
   end if;
+  update public.jobs set ai_result = ai_result - 'summary' where external_job_id = 'amazon_1';
+  if (public.get_public_job(1)->>'summary') is not null then
+    raise exception 'unproven scraper summary leaked into public detail';
+  end if;
+  update public.jobs set source_field_provenance = '{"summary":"structured"}'::jsonb
+    where external_job_id = 'amazon_1';
+  if (public.get_public_job(1)->>'summary') <> 'Scraper excerpt' then
+    raise exception 'structured source summary was hidden';
+  end if;
   update public.jobs set pay_range = '$150,000 source', required_qualifications = array['Source skill'],
     source_field_provenance = '{"pay_range":"structured","required_qualifications":"structured"}'::jsonb
     where external_job_id = 'amazon_1';

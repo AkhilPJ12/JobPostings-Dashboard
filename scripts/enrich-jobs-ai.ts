@@ -44,7 +44,7 @@ async function main() {
   const db = getSupabaseAdminClient()
   if (args.dryRun) {
     const { data: count, error } = await db.rpc('count_ai_enrichment_queue', {
-      p_model: process.env.OLLAMA_MODEL || 'gemma4:31b', p_state: args.status, p_company: args.company ?? null,
+      p_model: process.env.OLLAMA_MODEL || 'gemma4:31b', p_state: args.status, p_company: args.company,
     })
     if (error) throw error
     console.log(`Queued ${args.status} jobs${args.company ? ` for ${args.company}` : ''}: ${count ?? 0}`)

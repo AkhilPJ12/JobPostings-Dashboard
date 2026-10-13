@@ -56,6 +56,15 @@ function excerptExists(source: string, evidence: string | null): boolean {
   return Boolean(evidence && evidence.trim().length >= 3 && comparable(source).includes(comparable(evidence)))
 }
 
+function instructionContext(source: string, evidence: string | null): boolean {
+  if (!evidence) return false
+  const normalized = comparable(source)
+  const at = normalized.indexOf(comparable(evidence))
+  if (at < 0) return false
+  const context = normalized.slice(Math.max(0, at - 100), at + comparable(evidence).length + 60)
+  return /ignore (?:previous|above|all) instructions|(?:output|respond with|return) .{0,70}(?:salary|pay|sponsorship|clearance)/i.test(context)
+}
+
 export function validateEvidence(extraction: OllamaExtraction, source: Record<string, unknown>): AcceptedEnrichment {
   const description = String(source.description || '')
   const sourceText = [description, source.summary, source.title, source.location,
@@ -82,7 +91,7 @@ export function validateEvidence(extraction: OllamaExtraction, source: Record<st
   const pay = accept('payRange')
   const payAmounts = pay?.match(/\$\s?\d[\d,.]*/g) || []
   const payEvidence = extraction.payRange.evidence || ''
-  if (pay && payAmounts.length > 0 && payAmounts.every(amount =>
+  if (pay && !instructionContext(sourceText, payEvidence) && payAmounts.length > 0 && payAmounts.every(amount =>
     payEvidence.replace(/\s/g, '').includes(amount.replace(/\s/g, '')))) result.payRange = pay
   const location = accept('locationType')
   const locationEvidence = comparable(extraction.locationType.evidence || '')
@@ -102,16 +111,19 @@ export function validateEvidence(extraction: OllamaExtraction, source: Record<st
   }
   const sponsorship = accept('h1bSponsorship')
   const sponsorshipEvidence = extraction.h1bSponsorship.evidence || ''
+  const sponsorshipContext = /\b(?:visa|h[- ]?1b|immigration|work authorization|employment sponsorship)\b/i.test(sponsorshipEvidence)
   const sponsorshipDenied = /(?:no|not|without|unable|cannot|won't|will not).{0,45}sponsor|sponsor.{0,25}(?:not|unavailable)/i.test(sponsorshipEvidence)
-  if (sponsorship === 'Yes' && !sponsorshipDenied &&
+  if (sponsorship === 'Yes' && sponsorshipContext && !instructionContext(sourceText, sponsorshipEvidence) && !sponsorshipDenied &&
       /(?:will|can|offer|provide).{0,35}sponsor|sponsor(?:ship)?.{0,35}(?:available|provided|offered)/i.test(sponsorshipEvidence)) result.h1bSponsorship = 'Yes'
-  if (sponsorship === 'No' && /(?:no|not|without|unable|cannot|won't|will not).{0,45}sponsor|sponsor.{0,25}(?:not|unavailable)/i.test(extraction.h1bSponsorship.evidence || '')) result.h1bSponsorship = 'No'
+  if (sponsorship === 'No' && sponsorshipContext && !instructionContext(sourceText, sponsorshipEvidence) &&
+      sponsorshipDenied && !/\b(?:information|policy|details|stated|specified|addressed)\b/i.test(sponsorshipEvidence)) result.h1bSponsorship = 'No'
   const clearance = accept('securityClearance')
   const clearanceEvidence = extraction.securityClearance.evidence || ''
   const clearanceNotRequired = /(?:no|not|without).{0,25}(?:clearance|TS\/SCI)|(?:clearance|TS\/SCI).{0,25}(?:not|unnecessary)/i.test(clearanceEvidence)
-  if (clearance === 'Yes' && !clearanceNotRequired &&
-      /(?:must|require(?:d|s)?|active|hold|possess|obtain|eligible).{0,45}(?:clearance|TS\/SCI|public trust)|(?:clearance|TS\/SCI|public trust).{0,25}(?:required|must be held)/i.test(clearanceEvidence)) result.securityClearance = 'Yes'
-  if (clearance === 'No' && /(?:no|not|without).{0,25}(?:clearance|TS\/SCI)/i.test(extraction.securityClearance.evidence || '')) result.securityClearance = 'No'
+  if (clearance === 'Yes' && !instructionContext(sourceText, clearanceEvidence) && !clearanceNotRequired &&
+      /(?:must|require(?:d|s)?|active|hold|possess|obtain|eligible).{0,45}(?:clearance|TS\/SCI)|(?:clearance|TS\/SCI).{0,25}(?:required|must be held)/i.test(clearanceEvidence)) result.securityClearance = 'Yes'
+  if (clearance === 'No' && !instructionContext(sourceText, clearanceEvidence) &&
+      /\bno (?:security )?clearance (?:is )?required\b|\b(?:security )?clearance (?:is )?not required\b|\bdoes not require (?:a )?(?:security )?clearance\b/i.test(clearanceEvidence)) result.securityClearance = 'No'
   return result
 }
 
@@ -152,8 +164,8 @@ export class OllamaCloudProvider implements EnrichmentProvider {
             retryAfter && Number.isFinite(Number(retryAfter)) ? Number(retryAfter) : null)
         }
         const data = await response.json() as { message?: { content?: string }; prompt_eval_count?: number; eval_count?: number }
-        inputTokens = data.prompt_eval_count ?? inputTokens
-        outputTokens = data.eval_count ?? outputTokens
+        if (typeof data.prompt_eval_count === 'number') inputTokens = (inputTokens || 0) + data.prompt_eval_count
+        if (typeof data.eval_count === 'number') outputTokens = (outputTokens || 0) + data.eval_count
         try {
           const extraction = OllamaExtractionSchema.parse(extractJson(data.message?.content || ''))
           const result = validateEvidence(extraction, source)
@@ -165,8 +177,11 @@ export class OllamaCloudProvider implements EnrichmentProvider {
           return { result, requests, inputTokens, outputTokens }
         } catch (error) {
           if (error instanceof OllamaError) throw error
-          if (attempt === 1) throw new OllamaError('Ollama returned invalid extraction JSON')
-          repair = '\nPrevious output did not match the requested JSON structure. Return a complete JSON object only.'
+          const issue = error instanceof z.ZodError
+            ? error.issues.slice(0, 3).map(item => `${item.path.join('.')}: ${item.message}`).join('; ')
+            : error instanceof Error ? error.message : String(error)
+          if (attempt === 1) throw new OllamaError(`Ollama returned invalid extraction JSON: ${issue}`)
+          repair = `\nPrevious output did not match the requested JSON structure (${issue}). Return a complete JSON object only.`
         }
       } catch (error) {
         if (error instanceof OllamaError) throw error

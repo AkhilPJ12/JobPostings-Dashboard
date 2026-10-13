@@ -37,9 +37,7 @@ const frontendConfig = {
 }
 
 const liveTestFiles = [
-    '<rootDir>/__tests__/backend/company-queries.test.ts',
-    '<rootDir>/__tests__/backend/job-queries.test.ts',
-    '<rootDir>/__tests__/backend/supabase-connection.test.ts',
+    '<rootDir>/__tests__/backend/public-api-live.test.ts',
 ]
 
 // Backend tests (mocked database and scraper utilities) — use node

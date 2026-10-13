@@ -34,9 +34,9 @@ The ingestion contract and source normalization live under `lib/modules/ingestio
 
 Use Node 24 and pnpm 9. Run `pnpm install --frozen-lockfile`, then copy `.env.example` to `.env.local` and fill in the Supabase credentials. The anon key is for curated reads; keep the service role key and `OLLAMA_API_KEY` on the server or in GitHub Actions secrets.
 
-Apply the existing `scripts/sql/create-scraper-runs.sql` and `scripts/sql/ai-enrichment.sql` first if they have not already been applied. Then apply `scripts/sql/2026-10-10-architecture.sql` and `scripts/sql/2026-10-11-source-provenance.sql` in order. They add source identity and date provenance, restore recoverable source fields from old snapshots, add separate AI results and a durable queue, change run status to history, and install the public read functions. The latest migration hides historical code-inferred categories and facts unless a scraper marks a field as an explicit structured source value. Review the migrations against the actual Supabase schema before running them on production; they revoke direct anon/authenticated access to source and operations tables. The legacy `raw_job_payload` contains a normalized scraper snapshot, not the original HTTP response.
+For a new database, apply `scripts/sql/0000-base-schema.sql` first and create company records with the career URLs required by their scrapers. On an existing project, retain its `jobs` and `companies` tables. Apply `scripts/sql/create-scraper-runs.sql` and `scripts/sql/ai-enrichment.sql` if needed. Then apply `scripts/sql/2026-10-10-architecture.sql`, `scripts/sql/2026-10-11-source-provenance.sql`, and `scripts/sql/2026-10-12-source-summary.sql` in order. The last migration hides historical scraper-written summary templates unless a scraper marks a dedicated source summary as structured. Review the migrations against the actual Supabase schema before running them on production; they revoke direct anon/authenticated access to source and operations tables. The legacy `raw_job_payload` contains a normalized scraper snapshot, not the original HTTP response.
 
-The checked-in `lib/supabase.ts` types describe the expected database shape. After applying the migrations to staging, generate authoritative types with `npx supabase gen types typescript --db-url "$SUPABASE_DB_URL" > lib/database.generated.ts` and reconcile the compatibility types. The original `companies`/`jobs` table DDL is not versioned in this repository, so offline type generation cannot verify those base tables.
+`lib/database.generated.ts` is generated from the versioned baseline and migrations on a disposable PostgreSQL database; `lib/supabase.ts` imports those types. Regenerate with `pnpm dlx supabase gen types typescript --db-url "$SUPABASE_DB_URL" --schema public > lib/database.generated.ts` after applying the migrations. The production database may contain legacy columns that require reconciliation.
 
 ## Run and operate
 
@@ -47,13 +47,15 @@ pnpm exec tsx scripts/scrape-all-jobs.ts --api-only --batch 0
 pnpm exec tsx scripts/scrape-all-jobs.ts --browser-only --batch 0
 pnpm exec tsx scripts/scrape-all-jobs.ts amazon
 pnpm enrich:ai -- --limit 25 --dry-run
+pnpm exec tsx scripts/ollama-smoke.ts
 pnpm enrich:ai -- --limit 200
 pnpm typecheck
 pnpm test:unit
+pnpm test:live
 pnpm build
 ```
 
-On a disposable local PostgreSQL database, run `TEST_DATABASE_URL=postgresql://... bash scripts/test-db-contracts.sh` to execute the migrations and concurrency checks. On staging, run `pnpm exec tsx scripts/benchmark-search.ts` after loading 100,000 visible jobs. Run `pnpm exec tsx scripts/evaluate-ai.ts annotated-postings.json` with at least 50 human-annotated public postings before enabling the cloud workflow.
+On a disposable local PostgreSQL database, run `TEST_DATABASE_URL=postgresql://... bash scripts/test-db-contracts.sh` to execute the migrations and concurrency checks. The optional `__tests__/db/scale-fixture.sql` adds 100 companies and 100,000 active jobs to that disposable database and reports local timing and payload bounds. On staging, run `pnpm exec tsx scripts/benchmark-search.ts` after loading 100,000 visible jobs. Run `pnpm exec tsx scripts/sample-ai-evaluation.ts` to prepare 50 live source snapshots for review, then run `pnpm exec tsx scripts/evaluate-ai.ts annotated-postings.json` after a human annotates them. The sample file is ignored by Git and must not be treated as ground truth until reviewed.
 
 The scrape workflow runs lifecycle maintenance once, then eight source partitions with at most four jobs at a time. A source lease prevents overlapping runs. The enrichment workflow checks the GitHub repository variable `AI_ENRICHMENT_ENABLED`; leave it unset or `false` until the accuracy review passes. When enabled, it runs every four hours using `OLLAMA_API_KEY` from GitHub secrets and defaults to `gemma4:31b` from `OLLAMA_MODEL`.
 
@@ -61,14 +63,14 @@ Scrapers detect HTTP 403/429 and common challenge pages as source blocks. The de
 
 `SCRAPING_FALLBACK=none` disables fallback. The paid [ScrapingBee API](https://www.scrapingbee.com/documentation/) remains available only with `SCRAPING_FALLBACK=scrapingbee` and `SCRAPINGBEE_API_KEY`; its signup credits are a trial, not a permanent free tier. Any fallback can still fail on sites that require interactive sessions or block the runner IP. Such blocks appear as errors or partial runs. A completed fetch with zero eligible postings remains successful.
 
-The worker has a 200-job run cap, an eight request/minute pace, and a 1,200 request/day application cap in UTC. Format repair and retries consume quota. Failed enrichment does not hide source postings. Change the model by updating `ai_enrichment_settings` and enqueueing desired source hashes for the new model before changing `OLLAMA_MODEL`; otherwise the new worker will find no matching queue entries.
+The non-publishing Ollama smoke command consumes one or two calls from the same UTC application quota and prints only extraction metadata. The worker has a 200-job run cap, an eight request/minute pace, and a 1,200 request/day application cap in UTC. Format repair and retries consume quota. Failed enrichment does not hide source postings. Change the model by updating `ai_enrichment_settings` and enqueueing desired source hashes for the new model before changing `OLLAMA_MODEL`; otherwise the new worker will find no matching queue entries.
 
 ## Data rules
 
 - The public browse window is the last 14 calendar days. Future dates and expired postings are excluded.
 - Date provenance distinguishes source posting dates, first-seen dates, and unverified legacy dates. First-seen identities remain after content is purged at 180 days.
 - Unknown pay, sponsorship, clearance, work arrangement, or employment type appears as “Unknown.” AI facts require source excerpts; source descriptions and titles remain unchanged.
-- Scraper guesses from legacy helper functions are discarded at the normalization boundary and are absent from the AI input. Only explicitly mapped company fields are stored as structured source facts; Ollama classifies every other factual field, including pay, sponsorship, and clearance. The public view lets structured source facts override AI and hides unproven historical categories.
+- Scraper guesses from legacy helper functions are discarded at the normalization boundary and are absent from the AI input. Only explicitly mapped company fields are stored as structured source facts; Ollama classifies every other factual field, including pay, sponsorship, and clearance. Scraper-written template summaries are discarded; a dedicated company summary needs explicit structured provenance. The public view lets structured source facts override AI and hides unproven historical categories and summaries.
 - The dashboard queries one 20-job page by default, with a maximum of 100, and uses URL parameters for search and filters. The Status tab loads operational aggregates on demand.
 - `scripts/sql/2026-10-10-architecture.sql` owns queue claims and result publication so a stale model response cannot overwrite a changed source posting.
 
@@ -76,7 +78,7 @@ The worker has a 200-job run cap, an eight request/minute pace, and a 1,200 requ
 
 Use an annotated set of at least 50 representative postings and adversarial cases. Require zero unsupported accepted pay, sponsorship, or clearance claims, at least 95% precision for factual extractions, and at least 90% coverage of explicitly stated target fields. Keep `AI_ENRICHMENT_ENABLED=false` until these checks pass. The repository's automated tests use mocked cloud responses and a disposable local PostgreSQL database; the 100,000-job benchmark and cloud evaluation still require staging data and an Ollama key.
 
-The evaluation file is a JSON array of `{ "source": { ...normalized scraper fields... }, "expected": { ... } }`. Each `expected` object has nullable strings for `payRange`, `h1bSponsorship`, `securityClearance`, `locationType`, `employmentType`, and `department`, plus string arrays for `requiredQualifications` and `preferredQualifications`. Use `null` only when the original posting does not explicitly state the fact.
+The evaluation file is a JSON array of `{ "reviewed": true, "source": { ...normalized scraper fields... }, "expected": { ... } }`. Each `expected` object has nullable strings for `payRange`, `h1bSponsorship`, `securityClearance`, `locationType`, `employmentType`, and `department`, plus string arrays for `requiredQualifications` and `preferredQualifications`. Set `reviewed` to true only after verifying every expected value; use `null` only when the original posting does not explicitly state the fact. The evaluator adds six checked-in adversarial fixtures to the 50 reviewed real postings.
 
 ## Supported Companies (26)
 

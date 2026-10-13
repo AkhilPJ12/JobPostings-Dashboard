@@ -725,7 +725,7 @@ export async function withScraperRun(companyName: string, fn: () => Promise<void
             const { data, error } = await supabase.rpc('finish_scraper_lease', {
                 p_company: companyName, p_token: lease!, p_run_group: `direct-${startedAt.getTime()}`,
                 p_status: sourceFailures.length ? 'Partial' : 'Successful', p_started_at: startedAt.toISOString(),
-                p_completed_at: new Date().toISOString(), p_error: sourceFailures.join('; ') || null,
+                p_completed_at: new Date().toISOString(), p_error: sourceFailures.join('; '),
             })
             if (error) throw error
             if (!data) throw new Error(`Lost scraper lease for ${companyName}`)

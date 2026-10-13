@@ -26,12 +26,15 @@ import {
     normalizeDepartment,
     sleep, randomDelay, withScraperRun,
 } from './scraper-utils'
+import { noteSourceFailure } from '../lib/modules/ingestion/health'
 
 const CONFIG = {
     companyName: 'Apple',
     dateWindowDays: 14,
     maxPages: 100,
-    detailConcurrency: 4,  // parallel detail page fetches
+    detailConcurrency: 4,
+    listingBudgetMs: 180000,
+    sourceBudgetMs: 480000,
 }
 
 type ListJob = {
@@ -55,8 +58,8 @@ type DetailData = {
 async function fetchAppleJobDetail(context: BrowserContext, jobUrl: string): Promise<DetailData> {
     const page = await context.newPage()
     try {
-        await navigateSource(page, jobUrl, { waitUntil: 'networkidle', timeout: 45000 })
-        await sleep(randomDelay(800, 1500))
+        await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
+        await page.waitForSelector('h2.t-label', { timeout: 5000 })
 
         const sections = await page.evaluate(() => {
             const result: Record<string, { text: string; items: string[] }> = {}
@@ -84,6 +87,7 @@ async function fetchAppleJobDetail(context: BrowserContext, jobUrl: string): Pro
             payBenefits: sections['Pay & Benefits']?.text || '',
         }
     } catch {
+        noteSourceFailure('Apple could not load one or more detail pages')
         return { summary: '', description: '', responsibilities: [], minQualifications: [], prefQualifications: [], payBenefits: '' }
     } finally {
         await page.close()
@@ -108,6 +112,7 @@ async function scrapeAppleJobs() {
         viewport: { width: 1280, height: 900 },
     })
     const page = await context.newPage()
+    const deadline = Date.now() + CONFIG.sourceBudgetMs
 
     try {
         // ── Phase 1: collect all matching jobs from list pages ──────────────
@@ -119,8 +124,13 @@ async function scrapeAppleJobs() {
         const seenIds = new Set<string>()
         let pageNum = 1
         let earlyStop = false
+        const listingDeadline = Date.now() + CONFIG.listingBudgetMs
 
         while (pageNum <= CONFIG.maxPages && !earlyStop) {
+            if (Date.now() >= listingDeadline) {
+                noteSourceFailure('Apple listing scan reached its time budget; more pages may remain')
+                break
+            }
             console.log(`📄 Page ${pageNum}...`)
 
             await page.waitForSelector('div.job-title.job-list-item', { timeout: 15000 }).catch(() => { })
@@ -176,6 +186,9 @@ async function scrapeAppleJobs() {
             await sleep(randomDelay(2000, 4000))
             pageNum++
         }
+        if (pageNum > CONFIG.maxPages && !earlyStop) {
+            noteSourceFailure(`Apple listing scan reached the ${CONFIG.maxPages}-page limit`)
+        }
 
         console.log(`\n📋 ${listJobs.length} jobs found. Fetching full details...`)
 
@@ -185,65 +198,64 @@ async function scrapeAppleJobs() {
         }
 
         // ── Phase 2: fetch detail pages in parallel batches ────────────────
-        const detailMap = new Map<string, DetailData>()
+        let collectedCount = 0
+        let writtenCount = 0
         for (let i = 0; i < listJobs.length; i += CONFIG.detailConcurrency) {
+            if (Date.now() >= deadline) {
+                noteSourceFailure('Apple detail scan reached its time budget; more jobs remain')
+                break
+            }
             const batch = listJobs.slice(i, i + CONFIG.detailConcurrency)
             console.log(`   🔍 Details ${i + 1}–${Math.min(i + CONFIG.detailConcurrency, listJobs.length)} / ${listJobs.length}`)
             const results = await Promise.all(
                 batch.map(j => fetchAppleJobDetail(context, j.url))
             )
-            batch.forEach((j, idx) => detailMap.set(j.id, results[idx]))
-            await sleep(randomDelay(500, 1000))
-        }
-
-        // ── Phase 3: build DbJob records ───────────────────────────────────
-        const collectedJobs: DbJob[] = []
-        for (const j of listJobs) {
-            const postedDate = parsePostedDate(j.dateText)!
-            const detail = detailMap.get(j.id) || { summary: '', description: '', responsibilities: [], minQualifications: [], prefQualifications: [], payBenefits: '' }
-
-            // Combine description sections into one rich text block
-            const descParts: string[] = []
-            if (detail.summary) descParts.push(detail.summary)
-            if (detail.description) descParts.push(detail.description)
-            if (detail.responsibilities.length) {
-                descParts.push('Responsibilities:\n' + detail.responsibilities.map(r => `• ${r}`).join('\n'))
-            }
-            const fullDescription = descParts.join('\n\n')
-
-            const job: DbJob = {
-                company_id: company.id,
-                external_job_id: `apple_${j.id}`,
-                title: j.title,
-                location: j.location || 'United States',
-                location_type: determineLocationType(j.location),
-                department: normalizeDepartment(j.team || 'General', j.title),
-                employment_type: determineEmploymentType(j.title),
-                posted_date: postedDate,
-                description: fullDescription || j.title,
-                summary: detail.summary || `${j.title} at Apple - ${j.location}`,
-                required_qualifications: detail.minQualifications,
-                preferred_qualifications: detail.prefQualifications,
-                pay_range: extractPayRange(detail.payBenefits || fullDescription),
-                security_clearance: detectSecurityClearance(fullDescription),
-                h1b_sponsorship: detectH1BSponsorship(fullDescription),
-                structuredSourceFields: {
-                    department: j.team || null,
+            const batchJobs: DbJob[] = batch.map((j, idx) => {
+                const detail = results[idx]
+                const descParts: string[] = []
+                if (detail.summary) descParts.push(detail.summary)
+                if (detail.description) descParts.push(detail.description)
+                if (detail.responsibilities.length) {
+                    descParts.push('Responsibilities:\n' + detail.responsibilities.map(r => `• ${r}`).join('\n'))
+                }
+                const fullDescription = descParts.join('\n\n')
+                return {
+                    company_id: company.id,
+                    external_job_id: `apple_${j.id}`,
+                    title: j.title,
+                    location: j.location || 'United States',
+                    location_type: determineLocationType(j.location),
+                    department: normalizeDepartment(j.team || 'General', j.title),
+                    employment_type: determineEmploymentType(j.title),
+                    posted_date: parsePostedDate(j.dateText)!,
+                    description: fullDescription || j.title,
+                    summary: detail.summary || `${j.title} at Apple - ${j.location}`,
                     required_qualifications: detail.minQualifications,
                     preferred_qualifications: detail.prefQualifications,
-                },
-                sourceHints: { payBenefits: detail.payBenefits || '' },
-                job_url: j.url,
-                is_active: true,
+                    pay_range: extractPayRange(detail.payBenefits || fullDescription),
+                    security_clearance: detectSecurityClearance(fullDescription),
+                    h1b_sponsorship: detectH1BSponsorship(fullDescription),
+                    structuredSourceFields: {
+                        summary: detail.summary || null,
+                        department: j.team || null,
+                        required_qualifications: detail.minQualifications,
+                        preferred_qualifications: detail.prefQualifications,
+                    },
+                    sourceHints: { payBenefits: detail.payBenefits || '' },
+                    job_url: j.url,
+                    is_active: true,
+                }
+            })
+            collectedCount += batchJobs.length
+            writtenCount += await upsertJobsBatch(batchJobs)
+            if (Date.now() < deadline) {
+                await sleep(randomDelay(500, 1000))
             }
-            collectedJobs.push(job)
         }
 
-        console.log(`\n📊 Total jobs: ${collectedJobs.length}`)
-        console.log(`🗄️  Upserting into Supabase...`)
-        const upsertedCount = await upsertJobsBatch(collectedJobs)
+        console.log(`\n📊 Total jobs processed: ${collectedCount}/${listJobs.length}`)
         const dbCount = await getCompanyJobCount(company.id)
-        logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount, careerUrl)
+        logSummary(CONFIG.companyName, collectedCount, writtenCount, dbCount, careerUrl)
 
     } finally {
         await browser.close()

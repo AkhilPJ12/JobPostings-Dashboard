@@ -7,6 +7,7 @@ export type LocationType = 'Remote' | 'Hybrid' | 'Onsite'
 export type EmploymentType = 'Full-time' | 'Part-time' | 'Contract' | 'Internship'
 
 export interface StructuredSourceFields {
+    summary?: string | null
     location_type?: LocationType | null
     department?: string | null
     employment_type?: EmploymentType | null
@@ -44,7 +45,7 @@ export interface AiUpsertJob {
     ai_enrichment_error?: string | null
     ai_enrichment_attempts?: number
     date_provenance?: 'source' | 'first_seen' | 'legacy_unknown'
-    source_field_provenance?: Json
+    source_field_provenance?: Record<string, string>
     structuredSourceFields?: StructuredSourceFields
     sourceHints?: Record<string, string>
 }
@@ -80,7 +81,9 @@ export function createRawJobPayload(job: AiUpsertJob): Json {
         posted_date: job.posted_date || null,
         end_date: job.end_date || null,
         description: job.description,
-        summary: job.summary,
+        // Scraper-written summaries are often templates. Only a summary that
+        // came from a dedicated source field is a source fact.
+        summary: job.structuredSourceFields?.summary?.trim() || null,
         job_url: job.job_url,
         structured_source_fields: { ...(job.structuredSourceFields || {}) },
         source_hints: job.sourceHints || {},
@@ -118,7 +121,7 @@ export function prepareJobForAiUpsert(
         location_type: structuredSourceFields.location_type || null,
         department: structuredSourceFields.department?.trim() || null,
         employment_type: structuredSourceFields.employment_type || null,
-        summary: job.summary?.trim() || null,
+        summary: structuredSourceFields.summary?.trim() || null,
         required_qualifications: structuredSourceFields.required_qualifications || [],
         preferred_qualifications: structuredSourceFields.preferred_qualifications || [],
         pay_range: structuredSourceFields.pay_range && structuredSourceFields.pay_range !== 'Not specified'
