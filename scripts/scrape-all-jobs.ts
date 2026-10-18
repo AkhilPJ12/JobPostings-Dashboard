@@ -42,6 +42,20 @@ function parseResult(output: string): ScrapeResult | null {
   } catch { return null }
 }
 
+export function parseScrapeProgress(output: string, company: string): number {
+  let written = 0
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.startsWith('SCRAPE_PROGRESS_JSON:')) continue
+    try {
+      const progress = JSON.parse(line.slice('SCRAPE_PROGRESS_JSON:'.length)) as { company?: string; written?: number }
+      if (progress.company === company && Number.isSafeInteger(progress.written) && progress.written! >= 0) {
+        written = Math.max(written, progress.written!)
+      }
+    } catch { /* Ignore a truncated progress line from a killed process. */ }
+  }
+  return written
+}
+
 async function runSource(source: RegisteredSource, runGroup: string) {
   const startedAt = new Date().toISOString()
   const { data: token, error: leaseError } = await supabase.rpc('claim_scraper_lease', {
@@ -55,14 +69,18 @@ async function runSource(source: RegisteredSource, runGroup: string) {
     console.log(`Starting ${source.name}`)
     const command = await runCommand(source)
     const result = parseResult(command.output)
-    if (command.timedOut) errorMessage = 'Scraper timed out'
+    const written = result?.written || parseScrapeProgress(command.output, source.name)
+    if (command.timedOut) {
+      status = written > 0 ? 'Partial' : 'Error'
+      errorMessage = 'Scraper timed out'
+    }
     else if (command.code !== 0) {
-      status = result && result.written > 0 ? 'Partial' : 'Error'
+      status = written > 0 ? 'Partial' : 'Error'
       errorMessage = result?.errors.join('; ') || `Scraper exited with code ${command.code}`
     }
     else if (!result || result.company !== source.name) errorMessage = 'Scraper did not report a structured result'
     else status = classifyScrapeResult(result)
-    if (status === 'Partial') errorMessage = result?.errors.join('; ') || 'Incomplete source or write result'
+    if (status === 'Partial' && !errorMessage) errorMessage = result?.errors.join('; ') || 'Incomplete source or write result'
   } catch (error) {
     errorMessage = error instanceof Error ? error.message : String(error)
   }

@@ -534,6 +534,7 @@ export async function getCompany(companyName: string): Promise<CompanyRecord> {
  * Upsert jobs in batches using external_job_id for deduplication.
  */
 let activeScrapeCounters: {
+    company: string
     eligibleIds: Set<string>
     writtenIds: Set<string>
     rejectedIds: Set<string>
@@ -628,6 +629,8 @@ export async function upsertJobsBatch(
             totalUpserted += preparedBatch.length
             if (activeScrapeCounters) {
                 for (const job of preparedBatch) activeScrapeCounters.writtenIds.add(job.external_job_id)
+                console.log(`SCRAPE_PROGRESS_JSON:${JSON.stringify({ company: activeScrapeCounters.company,
+                    written: activeScrapeCounters.writtenIds.size })}`)
             }
             console.log(`   📦 Batch ${batchNum}: ${preparedBatch.length} upserted (${totalUpserted}/${jobs.length})`)
         }
@@ -760,7 +763,7 @@ export async function withScraperRun(companyName: string, fn: () => Promise<void
         if (!data) throw new Error(`Another run owns the scraper lease for ${companyName}`)
         lease = data
     }
-    activeScrapeCounters = { eligibleIds: new Set(), writtenIds: new Set(), rejectedIds: new Set() }
+    activeScrapeCounters = { company: companyName, eligibleIds: new Set(), writtenIds: new Set(), rejectedIds: new Set() }
     resetSourceFailures()
     const startedAt = new Date()
     let finished = false

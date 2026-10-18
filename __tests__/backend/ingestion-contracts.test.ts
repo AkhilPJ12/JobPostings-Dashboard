@@ -1,7 +1,7 @@
 import { classifyScrapeResult } from '@/lib/modules/ingestion/contracts'
 import { SOURCES, partitionSources } from '@/lib/modules/ingestion/registry'
 import { fetchSource } from '@/lib/modules/ingestion/http'
-import { selectSources } from '@/scripts/scrape-all-jobs'
+import { parseScrapeProgress, selectSources } from '@/scripts/scrape-all-jobs'
 
 describe('ingestion contracts', () => {
   it('classifies a complete zero-job scrape as successful and partial writes as partial', () => {
@@ -31,5 +31,15 @@ describe('ingestion contracts', () => {
     const result = await fetchSource('https://example.com/jobs', {}, mock as typeof fetch)
     expect(result.status).toBe(404)
     expect(mock).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers committed write progress when a scraper times out before its final result', () => {
+    const output = [
+      'SCRAPE_PROGRESS_JSON:{"company":"Staples","written":10}',
+      'SCRAPE_PROGRESS_JSON:{"company":"Another","written":99}',
+      'SCRAPE_PROGRESS_JSON:{"company":"Staples","written":20}',
+      'SCRAPE_PROGRESS_JSON:{"company":"Staples","written":',
+    ].join('\n')
+    expect(parseScrapeProgress(output, 'Staples')).toBe(20)
   })
 })
