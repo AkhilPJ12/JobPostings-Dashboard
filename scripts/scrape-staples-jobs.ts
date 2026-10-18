@@ -10,10 +10,11 @@ import { navigateSource } from '../lib/modules/ingestion/browser'
  */
 
 import { BrowserContext, chromium } from 'playwright'
+import { parseStaplesPosting } from '../lib/modules/ingestion/adapters/staples'
 import { noteSourceFailure } from '../lib/modules/ingestion/health'
 import {
     DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary,
-    isWithinDaysOrFuture, extractPayRange, parseSlashDate,
+    isWithinDaysOrFuture, extractPayRange, parseSlashDate, cleanHtml, parseDescriptionQualifications,
     detectSecurityClearance, detectH1BSponsorship,
     determineLocationType, determineEmploymentType,
     normalizeDepartment,
@@ -51,12 +52,30 @@ async function fetchStaplesDetail(context: BrowserContext, jobUrl: string): Prom
     const page = await context.newPage()
     try {
         await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
-        await page.waitForSelector('h1', { timeout: 5000 })
+        const posting = parseStaplesPosting(await page.content())
+        if (posting) {
+            const body = await page.locator('body').innerText()
+            const description = cleanHtml(posting.descriptionHtml)
+            const qualifications = parseDescriptionQualifications(description)
+            return {
+                title: posting.title,
+                location: posting.location,
+                datePosted: posting.postedDate || body.match(/Date posted\s*([\d/]+)/i)?.[1] || null,
+                pay: body.match(/Pay Range\s*([^\n]+)/i)?.[1]?.trim() || '',
+                category: body.match(/Category\s*([^\n]+)/i)?.[1]?.trim() || '',
+                remote: body.match(/Remote\/On-site\s*([^\n]+)/i)?.[1]?.trim() || '',
+                jobId: posting.jobId,
+                description,
+                required: qualifications.required,
+                preferred: qualifications.preferred,
+            }
+        }
+        await page.waitForSelector('.job-description__title, h1', { timeout: 5000 })
         await sleep(randomDelay(500, 900))
 
         const data = await page.evaluate(() => {
             const body = document.body.innerText || ''
-            const titleEl = document.querySelector('h1')
+            const titleEl = document.querySelector('.job-description__title, h1')
             const title = titleEl?.textContent?.trim() || ''
 
             const dateMatch = body.match(/Date posted\s*([\d\/]+)/i)
@@ -65,8 +84,6 @@ async function fetchStaplesDetail(context: BrowserContext, jobUrl: string): Prom
             const idMatch = body.match(/Job ID\s*(\d+)/i)
             const remoteMatch = body.match(/Remote\/On-site\s*([^\n]+)/i)
 
-            // Location: usually right after the title in format "City, State, United States"
-            const locMatch = body.match(/(?:United States|Remote)[\s\S]*?(?=\nApply|\nSave)/i)
             // Simpler: get the text between title and "Apply"
             const lines = body.split('\n').map(l => l.trim()).filter(Boolean)
             const titleIdx = lines.findIndex(l => l === title)
@@ -215,7 +232,9 @@ async function scrapeStaplesJobs() {
                 const d = details[k]
                 if (!d) { failedDetails++; continue }
 
-                const sourcePostedDate = d.datePosted ? parseSlashDate(d.datePosted) : null
+                const sourcePostedDate = d.datePosted
+                    ? /^\d{4}-\d{2}-\d{2}$/.test(d.datePosted) ? d.datePosted : parseSlashDate(d.datePosted)
+                    : null
                 if (!sourcePostedDate) noDate++
                 if (sourcePostedDate && !isWithinDaysOrFuture(sourcePostedDate, CONFIG.dateWindowDays)) {
                     dateSkipped++
