@@ -114,7 +114,10 @@ async function scrapeOpenAIJobs() {
     if (collectedJobs.length === 0) { console.log('⚠️  No jobs found.'); return }
 
     console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs...`)
-    const upsertedCount = await upsertJobsBatch(collectedJobs)
+    // Ashby descriptions are large, and each write also updates the source
+    // identity and enrichment queue. Keep transactions below Supabase's
+    // statement deadline instead of sending the default 50 jobs at once.
+    const upsertedCount = await upsertJobsBatch(collectedJobs, 10)
     const dbCount = await getCompanyJobCount(company.id)
     logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount,
         company.careers_url || 'https://openai.com/careers/search/')
