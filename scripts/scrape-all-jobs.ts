@@ -110,9 +110,9 @@ async function main() {
   const api = sources.filter(source => source.kind === 'api')
   const browser = sources.filter(source => source.kind === 'browser')
   const statuses: string[] = []
-  for (let index = 0; index < api.length; index += 4) {
-    statuses.push(...await Promise.all(api.slice(index, index + 4).map(source => runSource(source, group))))
-  }
+  // Each source process may issue four HTTP requests. Keep one process per
+  // workflow worker so its request ceiling remains four, not sixteen.
+  for (const source of api) statuses.push(await runSource(source, group))
   for (const source of browser) statuses.push(await runSource(source, group))
   if (statuses.includes('Error')) process.exitCode = 1
 }

@@ -10,6 +10,7 @@ import { navigateSource } from '../lib/modules/ingestion/browser'
  */
 
 import { BrowserContext, chromium } from 'playwright'
+import { noteSourceFailure } from '../lib/modules/ingestion/health'
 import {
     DbJob, getCompany, upsertJobsBatch, getCompanyJobCount, logSummary,
     isWithinDaysOrFuture, extractPayRange, parseSlashDate,
@@ -22,8 +23,10 @@ import {
 const CONFIG = {
     companyName: 'Staples',
     dateWindowDays: 14,
-    maxPages: 20,
+    maxPages: 12,
     detailConcurrency: 4,
+    listingBudgetMs: 120000,
+    sourceBudgetMs: 480000,
 }
 
 type ListJob = { url: string; title: string }
@@ -42,11 +45,14 @@ type DetailData = {
     preferred: string[]
 }
 
+let firstDetailFailure: string | null = null
+
 async function fetchStaplesDetail(context: BrowserContext, jobUrl: string): Promise<DetailData | null> {
     const page = await context.newPage()
     try {
         await navigateSource(page, jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
-        await sleep(randomDelay(2000, 3500))
+        await page.waitForSelector('h1', { timeout: 5000 })
+        await sleep(randomDelay(500, 900))
 
         const data = await page.evaluate(() => {
             const body = document.body.innerText || ''
@@ -108,7 +114,10 @@ async function fetchStaplesDetail(context: BrowserContext, jobUrl: string): Prom
         })
 
         return data
-    } catch {
+    } catch (error) {
+        if (!firstDetailFailure) {
+            firstDetailFailure = error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180)
+        }
         return null
     } finally {
         await page.close()
@@ -127,30 +136,39 @@ async function scrapeStaplesJobs() {
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 900 },
     })
+    const deadline = Date.now() + CONFIG.sourceBudgetMs
 
     try {
         // Phase 1: Collect all job URLs from list pages
         console.log('📋 Phase 1: Collecting job URLs from list pages...')
         const jobUrls: ListJob[] = []
         const seenUrls = new Set<string>()
+        const listingDeadline = Date.now() + CONFIG.listingBudgetMs
 
         for (let pageNum = 1; pageNum <= CONFIG.maxPages; pageNum++) {
+            if (Date.now() >= listingDeadline) {
+                noteSourceFailure('Staples listing scan reached its time budget; more pages may remain')
+                break
+            }
             const url = pageNum === 1
                 ? 'https://careers.staples.com/en/search-jobs'
                 : `https://careers.staples.com/en/search-jobs?p=${pageNum}`
 
             console.log(`📄 Page ${pageNum}...`)
             const page = await context.newPage()
-            await navigateSource(page, url, { waitUntil: 'domcontentloaded', timeout: 60000 })
-            await sleep(randomDelay(5000, 8000))
-
-            const links = await page.evaluate(() => {
-                return Array.from(document.querySelectorAll('a[href*="/en/job/"]')).map(a => ({
-                    url: (a as HTMLAnchorElement).href,
-                    title: a.textContent?.trim().split('\n')[0]?.trim() || '',
-                }))
-            })
-            await page.close()
+            let links: ListJob[]
+            try {
+                await navigateSource(page, url, { waitUntil: 'domcontentloaded', timeout: 60000 })
+                await sleep(randomDelay(700, 1200))
+                links = await page.evaluate(() => {
+                    return Array.from(document.querySelectorAll('a[href*="/en/job/"]')).map(a => ({
+                        url: (a as HTMLAnchorElement).href,
+                        title: a.textContent?.trim().split('\n')[0]?.trim() || '',
+                    }))
+                })
+            } finally {
+                await page.close()
+            }
 
             if (links.length === 0) {
                 console.log('   📭 No jobs. Done.')
@@ -166,16 +184,25 @@ async function scrapeStaplesJobs() {
                 }
             }
             console.log(`   ✅ ${added} new URLs (${jobUrls.length} total)`)
+            if (pageNum === CONFIG.maxPages) {
+                noteSourceFailure(`Staples listing scan reached the ${CONFIG.maxPages}-page limit`)
+            }
         }
 
         console.log(`\n📋 ${jobUrls.length} job URLs collected. Fetching details...`)
 
         // Phase 2: Fetch detail pages in batches
-        const collectedJobs: DbJob[] = []
+        let collectedCount = 0
+        let writtenCount = 0
         let dateSkipped = 0
         let noDate = 0
+        let failedDetails = 0
 
         for (let i = 0; i < jobUrls.length; i += CONFIG.detailConcurrency) {
+            if (Date.now() >= deadline) {
+                noteSourceFailure('Staples detail scan reached its time budget; more jobs remain')
+                break
+            }
             const batch = jobUrls.slice(i, i + CONFIG.detailConcurrency)
             console.log(`🔍 Details ${i + 1}–${Math.min(i + CONFIG.detailConcurrency, jobUrls.length)} / ${jobUrls.length}`)
 
@@ -183,22 +210,24 @@ async function scrapeStaplesJobs() {
                 batch.map(j => fetchStaplesDetail(context, j.url))
             )
 
+            const batchJobs: DbJob[] = []
             for (let k = 0; k < batch.length; k++) {
                 const d = details[k]
-                if (!d || !d.datePosted) { noDate++; continue }
+                if (!d) { failedDetails++; continue }
 
-                const postedDate = parseSlashDate(d.datePosted)
-                if (!postedDate) { noDate++; continue }
-                if (!isWithinDaysOrFuture(postedDate, CONFIG.dateWindowDays)) {
+                const sourcePostedDate = d.datePosted ? parseSlashDate(d.datePosted) : null
+                if (!sourcePostedDate) noDate++
+                if (sourcePostedDate && !isWithinDaysOrFuture(sourcePostedDate, CONFIG.dateWindowDays)) {
                     dateSkipped++
                     continue
                 }
+                const postedDate = sourcePostedDate || new Date().toISOString().slice(0, 10)
 
                 const title = d.title || batch[k].title
                 const fullText = [title, d.location, d.description, d.pay].filter(Boolean).join('\n')
 
                 // Truncate fields to fit varchar(255) DB columns
-                const loc = (d.location || 'United States').slice(0, 250)
+                const loc = (d.location || '').slice(0, 250)
                 const payRange = (d.pay || extractPayRange(fullText)).slice(0, 250)
 
                 const job: DbJob = {
@@ -210,6 +239,7 @@ async function scrapeStaplesJobs() {
                     department: normalizeDepartment(d.category || 'General', title),
                     employment_type: determineEmploymentType(title),
                     posted_date: postedDate,
+                    sourceDateProvenance: sourcePostedDate ? 'source' : 'first_seen',
                     description: d.description || `${title} at Staples - ${d.location}`,
                     summary: `${title} at Staples - ${loc}`.slice(0, 250),
                     required_qualifications: d.required,
@@ -227,23 +257,26 @@ async function scrapeStaplesJobs() {
                     job_url: batch[k].url,
                     is_active: true,
                 }
-                collectedJobs.push(job)
+                batchJobs.push(job)
             }
 
-            await sleep(randomDelay(300, 800))
+            if (batchJobs.length) {
+                collectedCount += batchJobs.length
+                writtenCount += await upsertJobsBatch(batchJobs)
+            }
+            if (Date.now() < deadline) await sleep(randomDelay(300, 800))
         }
 
-        console.log(`\n📊 Total: ${collectedJobs.length} jobs (${dateSkipped} date-skipped, ${noDate} no-date)`)
+        if (failedDetails) noteSourceFailure(`Staples could not load ${failedDetails} detail pages${firstDetailFailure ? ` (first error: ${firstDetailFailure})` : ''}`)
+        console.log(`\n📊 Total: ${collectedCount} jobs (${dateSkipped} date-skipped, ${noDate} first-seen, ${failedDetails} failed details)`)
 
-        if (collectedJobs.length === 0) {
+        if (collectedCount === 0) {
             console.log('⚠️  No jobs found.')
             return
         }
 
-        console.log(`\n🗄️  Upserting ${collectedJobs.length} jobs into Supabase...`)
-        const upsertedCount = await upsertJobsBatch(collectedJobs)
         const dbCount = await getCompanyJobCount(company.id)
-        logSummary(CONFIG.companyName, collectedJobs.length, upsertedCount, dbCount,
+        logSummary(CONFIG.companyName, collectedCount, writtenCount, dbCount,
             company.careers_url || 'https://careers.staples.com/en/search-jobs')
 
     } finally {
