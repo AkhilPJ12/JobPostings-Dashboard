@@ -310,6 +310,18 @@ export function JobDetailContent({ job }: { job: Job }) {
               </section>
             )}
 
+            {!job.description.trim() && (
+              <section className="rounded-lg border border-border/60 bg-card p-5">
+                <SectionHeading icon={FileText}>Source description</SectionHeading>
+                <p className="mt-4 text-sm leading-7 text-muted-foreground">
+                  The source description is unavailable here.
+                  {job.jobUrl && (
+                    <> <a href={job.jobUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">View the original posting</a> for current details.</>
+                  )}
+                </p>
+              </section>
+            )}
+
             {responsibilities && (
               <section className="rounded-lg border border-border/60 bg-card p-5">
                 <SectionHeading icon={FileText}>About the Role</SectionHeading>

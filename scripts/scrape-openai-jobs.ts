@@ -88,7 +88,7 @@ async function scrapeOpenAIJobs() {
             department: normalizeDepartment(j.department || j.team || 'General', j.title),
             employment_type: determineEmploymentType(j.employmentType || j.title),
             posted_date: postedDate,
-            description: contentText || `${j.title} at OpenAI - ${location}`,
+            description: contentText,
             summary: truncateField(`${j.title} at OpenAI - ${location}`),
             required_qualifications: quals.required,
             preferred_qualifications: quals.preferred,

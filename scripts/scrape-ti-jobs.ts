@@ -200,7 +200,7 @@ async function scrapeTIJobs() {
                         department: normalizeDepartment('General', j.title),
                         employment_type: determineEmploymentType(j.title),
                         posted_date: j.postedDate,
-                        description: d.description || `${j.title} at Texas Instruments - ${j.location}`,
+                        description: d.description || '',
                         summary: truncateField(`${j.title} at Texas Instruments - ${j.location}`),
                         required_qualifications: d.qualifications.required,
                         preferred_qualifications: d.qualifications.preferred,

@@ -240,7 +240,7 @@ async function scrapeStaplesJobs() {
                     employment_type: determineEmploymentType(title),
                     posted_date: postedDate,
                     sourceDateProvenance: sourcePostedDate ? 'source' : 'first_seen',
-                    description: d.description || `${title} at Staples - ${d.location}`,
+                    description: d.description || '',
                     summary: `${title} at Staples - ${loc}`.slice(0, 250),
                     required_qualifications: d.required,
                     preferred_qualifications: d.preferred,

@@ -28,7 +28,7 @@ export interface AiUpsertJob {
     employment_type: EmploymentType | null
     posted_date: string
     end_date?: string | null
-    description: string
+    description: string | null
     summary: string | null
     required_qualifications: string[]
     preferred_qualifications: string[]
@@ -122,6 +122,7 @@ export function prepareJobForAiUpsert(
         ...sourceJob,
         location: job.location && !['Unknown', 'N/A', 'Not specified'].includes(job.location.trim())
             ? job.location.trim() : null,
+        description: job.description?.trim() || null,
         location_type: structuredSourceFields.location_type || null,
         department: structuredSourceFields.department?.trim() || null,
         employment_type: structuredSourceFields.employment_type || null,

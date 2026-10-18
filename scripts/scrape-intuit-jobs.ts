@@ -221,7 +221,7 @@ async function scrapeIntuitJobs() {
                     department: normalizeDepartment(d?.category || 'General', title),
                     employment_type: determineEmploymentType(title),
                     posted_date: today,
-                    description: d?.description || `${title} at Intuit - ${location}`,
+                    description: d?.description || '',
                     summary: `${title} at Intuit - ${location}`.slice(0, 250),
                     required_qualifications: d?.required || [],
                     preferred_qualifications: d?.preferred || [],

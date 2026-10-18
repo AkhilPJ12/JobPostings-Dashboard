@@ -63,15 +63,17 @@ describe('source preservation and Ollama validation', () => {
   })
 
   it('stores missing factual values as null in the normalized source snapshot', () => {
-    const prepared = prepareJobForAiUpsert({ ...source, location: '', pay_range: 'Not specified',
+    const prepared = prepareJobForAiUpsert({ ...source, location: '', description: '', pay_range: 'Not specified',
       h1b_sponsorship: 'N/A', security_clearance: 'N/A', summary: '' })
     expect(prepared.location).toBeNull()
+    expect(prepared.description).toBeNull()
     expect(prepared.pay_range).toBeNull()
     expect(prepared.h1b_sponsorship).toBeNull()
     expect(prepared.security_clearance).toBeNull()
     expect(prepared.summary).toBeNull()
     expect((prepared.raw_job_payload as Record<string, unknown>).pay_range).toBeUndefined()
     expect((prepared.raw_job_payload as Record<string, unknown>).location).toBeNull()
+    expect((prepared.raw_job_payload as Record<string, unknown>).description).toBeNull()
     expect((prepared.raw_job_payload as Record<string, unknown>).structured_source_fields).toEqual({})
   })
 

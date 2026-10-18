@@ -162,7 +162,7 @@ async function scrapeWiproJobs() {
                     department: normalizeDepartment('General', title),
                     employment_type: determineEmploymentType(title),
                     posted_date: postedDate,
-                    description: d.description || `${title} at Wipro - ${location}`,
+                    description: d.description || '',
                     summary: `${title} at Wipro - ${location}`.slice(0, 250),
                     required_qualifications: [],
                     preferred_qualifications: [],

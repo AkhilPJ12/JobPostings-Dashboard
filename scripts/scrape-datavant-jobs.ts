@@ -93,7 +93,7 @@ async function scrapeDatevantJobs() {
             employment_type: determineEmploymentType(j.title),
             posted_date: postedDate,
             sourceDateProvenance: sourcePostedDate ? 'source' : 'first_seen',
-            description: contentText || `${j.title} at Datavant - ${fullLocation}`,
+            description: contentText,
             summary: `${j.title} at Datavant - ${fullLocation}`.slice(0, 250),
             required_qualifications: quals.required,
             preferred_qualifications: quals.preferred,

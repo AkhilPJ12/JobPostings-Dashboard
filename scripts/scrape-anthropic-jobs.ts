@@ -86,7 +86,7 @@ async function scrapeAnthropicJobs() {
             employment_type: determineEmploymentType(j.title),
             posted_date: postedDate,
             sourceDateProvenance: sourcePostedDate ? 'source' : 'first_seen',
-            description: contentText || `${j.title} at Anthropic - ${fullLocation}`,
+            description: contentText,
             summary: truncateField(`${j.title} at Anthropic - ${fullLocation}`),
             required_qualifications: quals.required,
             preferred_qualifications: quals.preferred,

@@ -213,7 +213,7 @@ async function scrapeWellsFargoJobs() {
                     department: normalizeDepartment(d.department || 'General', title),
                     employment_type: determineEmploymentType(d.timeType || title),
                     posted_date: postedDate,
-                    description: d.description || `${title} at Wells Fargo - ${d.location}`,
+                    description: d.description || '',
                     summary: `${title} at Wells Fargo - ${d.location}`.slice(0, 250),
                     required_qualifications: [],
                     preferred_qualifications: [],

@@ -145,7 +145,7 @@ async function scrapeInfosysJobs() {
                     department: normalizeDepartment('General', title),
                     employment_type: determineEmploymentType(title),
                     posted_date: today,
-                    description: d?.description || `${title} at Infosys - ${location}`,
+                    description: d?.description || '',
                     summary: `${title} at Infosys - ${location}`.slice(0, 250),
                     required_qualifications: [],
                     preferred_qualifications: [],
