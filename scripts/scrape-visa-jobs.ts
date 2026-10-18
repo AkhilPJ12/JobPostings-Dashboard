@@ -136,7 +136,7 @@ async function scrapeVisaJobs() {
             if (!title) continue
 
             const locationParts = [j.city, j.region, j.countryCode?.toUpperCase()].filter(Boolean)
-            const location = locationParts.join(', ') || 'United States'
+            const location = locationParts.join(', ')
 
             const jobDesc = htmlToText(j.jobDescription || '')
             const qualText = htmlToText(j.qualifications || '')

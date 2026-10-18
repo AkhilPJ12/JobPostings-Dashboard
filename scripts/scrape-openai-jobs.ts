@@ -66,8 +66,8 @@ async function scrapeOpenAIJobs() {
             dateSkipped++; continue
         }
 
-        const location = j.location || 'Remote'
-        if (!isUSLocation(location) && !j.isRemote && !location.toLowerCase().includes('remote')) {
+        const location = j.location || ''
+        if (location && !isUSLocation(location) && !j.isRemote && !location.toLowerCase().includes('remote')) {
             locationSkipped++; continue
         }
 

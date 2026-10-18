@@ -115,7 +115,7 @@ async function runMetaViaGraphQL(baseUrl: string, pages: number, requireDate: bo
             seen.add(id)
 
             const locations = Array.isArray(j.locations) ? j.locations.filter(Boolean) : []
-            const location = locations[0] || 'United States'
+            const location = locations[0] || ''
             // Meta's GraphQL API does not return posting dates
             const dateText = ''
 

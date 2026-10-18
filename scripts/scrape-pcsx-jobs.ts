@@ -392,7 +392,7 @@ async function runNvidiaApiPages(
                 continue
             }
 
-            const location = p.locations?.[0] || 'United States'
+            const location = p.locations?.[0] || ''
             if (location && !isUSLocation(location) && !location.toLowerCase().includes('remote')) {
                 continue
             }
@@ -534,7 +534,7 @@ async function runNvidiaWorkdayPages(
                     continue
                 }
 
-                const location = (p.locationsText || 'United States').trim()
+                const location = (p.locationsText || '').trim()
                 if (location && !isUSLocation(location) && !location.toLowerCase().includes('remote')) {
                     continue
                 }
@@ -683,7 +683,7 @@ async function runMicrosoftApiPages(
                 continue
             }
 
-            const location = p.locations?.[0] || 'United States'
+            const location = p.locations?.[0] || ''
             if (location && !isUSLocation(location) && !location.toLowerCase().includes('remote') && !location.includes('Multiple')) {
                 continue
             }

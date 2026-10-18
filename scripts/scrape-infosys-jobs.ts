@@ -133,7 +133,7 @@ async function scrapeInfosysJobs() {
             for (let k = 0; k < batch.length; k++) {
                 const d = details[k]
                 const title = d?.title || batch[k].title
-                const location = d?.location || 'United States'
+                const location = d?.location || ''
                 const fullText = [title, location, d?.description || ''].join('\n')
 
                 const job: DbJob = {

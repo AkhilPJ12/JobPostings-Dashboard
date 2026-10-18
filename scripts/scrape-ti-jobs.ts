@@ -195,7 +195,7 @@ async function scrapeTIJobs() {
                         company_id: company.id,
                         external_job_id: `ti_${j.id}`,
                         title: truncateField(j.title),
-                        location: truncateField(j.location || 'United States'),
+                        location: truncateField(j.location || ''),
                         location_type: determineLocationType(j.location, d.description),
                         department: normalizeDepartment('General', j.title),
                         employment_type: determineEmploymentType(j.title),

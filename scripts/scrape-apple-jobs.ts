@@ -223,7 +223,7 @@ async function scrapeAppleJobs() {
                     company_id: company.id,
                     external_job_id: `apple_${j.id}`,
                     title: j.title,
-                    location: j.location || 'United States',
+                    location: j.location || '',
                     location_type: determineLocationType(j.location),
                     department: normalizeDepartment(j.team || 'General', j.title),
                     employment_type: determineEmploymentType(j.title),

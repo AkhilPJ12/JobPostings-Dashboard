@@ -69,11 +69,11 @@ async function scrapeDatevantJobs() {
             continue
         }
 
-        const location = j.location?.name || 'Remote'
+        const location = j.location?.name || ''
         const officeNames = j.offices?.map(o => o.name).join(', ') || ''
         const fullLocation = officeNames || location
 
-        if (!isUSLocation(fullLocation) && !fullLocation.toLowerCase().includes('remote')) {
+        if (fullLocation && !isUSLocation(fullLocation) && !fullLocation.toLowerCase().includes('remote')) {
             locationSkipped++
             continue
         }

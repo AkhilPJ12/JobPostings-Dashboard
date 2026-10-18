@@ -150,7 +150,7 @@ async function scrapeWiproJobs() {
                 }
 
                 const title = d.title || batch[k].title
-                const location = [d.location, d.state].filter(Boolean).join(', ') || 'United States'
+                const location = [d.location, d.state].filter(Boolean).join(', ')
                 const fullText = [title, location, d.description].join('\n')
 
                 const job: DbJob = {

@@ -209,7 +209,7 @@ async function scrapeIntuitJobs() {
                 const d = details[k]
                 const listJob = batch[k]
                 const title = d?.title || listJob.title
-                const location = d?.location || listJob.location || 'United States'
+                const location = d?.location || listJob.location || ''
                 const fullText = [title, location, d?.description || ''].join('\n')
 
                 const job: DbJob = {

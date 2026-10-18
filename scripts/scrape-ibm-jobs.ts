@@ -153,7 +153,7 @@ async function scrapeIBMJobs() {
             const title = (src.title || '').trim()
             if (!title) continue
 
-            const location = (src.field_keyword_19 || 'United States').trim()
+            const location = (src.field_keyword_19 || '').trim()
             const rawDescription = src.description || ''
             const quals = parseDescriptionQualifications(htmlToText(rawDescription))
             const description = htmlToText(rawDescription)

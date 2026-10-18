@@ -196,7 +196,7 @@ async function scrapeOneWorkdayUrl(
                     continue
                 }
 
-                const location = (p.locationsText || 'United States').trim()
+                const location = (p.locationsText || '').trim()
                 if (location && !isUSLocation(location) && !location.toLowerCase().includes('remote')) {
                     continue
                 }

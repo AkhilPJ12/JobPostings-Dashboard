@@ -356,7 +356,7 @@ async function scrapeGoogleJobs() {
             company_id: company.id,
             external_job_id: `google_${j.id}`,
             title: j.title,
-            location: j.location || 'United States',
+            location: j.location || '',
             location_type: determineLocationType(j.location),
             department: normalizeDepartment('General', j.title),
             employment_type: determineEmploymentType(j.title),

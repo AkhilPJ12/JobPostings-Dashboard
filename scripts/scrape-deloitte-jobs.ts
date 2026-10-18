@@ -42,7 +42,7 @@ type JobDetailData = {
 
 function parseLocationAndDepartment(line: string): { location: string; department: string } {
     const compact = line.replace(/\s+/g, ' ').trim()
-    if (!compact) return { location: 'United States', department: 'General' }
+    if (!compact) return { location: '', department: 'General' }
     const parts = compact.split('|').map(p => p.trim()).filter(Boolean)
     return {
         location: parts.length > 0 ? parts[parts.length - 1] : compact,

@@ -374,7 +374,7 @@ function processJobForDb(job: AmazonJob, companyId: number): DbJob {
         company_id: companyId,
         external_job_id: job.id_icims, // Amazon's unique job ID
         title: job.title.trim(),
-        location: job.normalized_location || job.location || 'Not specified',
+        location: job.normalized_location || job.location || '',
         location_type: determineLocationType(job),
         department: normalizeDepartment(job.job_category || 'General', job.title.trim()),
         employment_type: determineEmploymentType(`${job.job_schedule_type} ${job.title}`),

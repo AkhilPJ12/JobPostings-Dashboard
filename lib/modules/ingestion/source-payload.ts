@@ -22,7 +22,7 @@ export interface AiUpsertJob {
     company_id: number
     external_job_id: string
     title: string
-    location: string
+    location: string | null
     location_type: LocationType | null
     department: string | null
     employment_type: EmploymentType | null
@@ -120,6 +120,8 @@ export function prepareJobForAiUpsert(
         .map(([key]) => [key, 'structured']))
     const prepared: AiUpsertJob = {
         ...sourceJob,
+        location: job.location && !['Unknown', 'N/A', 'Not specified'].includes(job.location.trim())
+            ? job.location.trim() : null,
         location_type: structuredSourceFields.location_type || null,
         department: structuredSourceFields.department?.trim() || null,
         employment_type: structuredSourceFields.employment_type || null,

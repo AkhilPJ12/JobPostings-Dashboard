@@ -208,7 +208,7 @@ async function scrapeWellsFargoJobs() {
                     company_id: company.id,
                     external_job_id: `wellsfargo_${d.jobId || batch[k].url.match(/r-(\d+)/)?.[1] || ''}`,
                     title: title.slice(0, 250),
-                    location: (d.location || 'United States').slice(0, 250),
+                    location: (d.location || '').slice(0, 250),
                     location_type: determineLocationType(d.location, d.description),
                     department: normalizeDepartment(d.department || 'General', title),
                     employment_type: determineEmploymentType(d.timeType || title),
