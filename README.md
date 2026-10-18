@@ -38,6 +38,8 @@ For a new database, apply `scripts/sql/0000-base-schema.sql` first and create co
 
 `lib/database.generated.ts` is generated from the versioned baseline and migrations on a disposable PostgreSQL database; `lib/supabase.ts` imports those types. Regenerate with `pnpm dlx supabase gen types typescript --db-url "$SUPABASE_DB_URL" --schema public > lib/database.generated.ts` after applying the migrations. The production database may contain legacy columns that require reconciliation.
 
+If an existing production project already has migrations through `2026-10-11-source-provenance.sql`, apply the three newer files without dropping any tables: open **Supabase Dashboard → SQL Editor → New query**, copy the entire contents of `2026-10-12-source-summary.sql`, and click **Run**. Repeat for `2026-10-13-inactive-retention.sql`, then `2026-10-14-enrichment-health.sql`, waiting for each query to succeed before opening the next. Verify the retention column with `select inactive_since_at from public.jobs limit 1;`. The service role API key cannot execute these schema migrations through the app or scraper workflow.
+
 ## Run and operate
 
 ```bash
